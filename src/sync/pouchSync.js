@@ -88,9 +88,9 @@ export const pushToCloud = async (data) => {
   const user = await storage.loadUser();
   if (!user?.uid) return; // Not logged in, skip
 
-  const localDB  = await getLocalDB(user.uid);
   const remoteDB = getRemoteDB(user.uid);
   if (!remoteDB) return;
+  const localDB  = await getLocalDB(user.uid);
 
   try {
     // Try to get existing doc (we need the _rev to update it)
@@ -129,9 +129,9 @@ export const pullFromCloud = async () => {
   const user = await storage.loadUser();
   if (!user?.uid) return null;
 
-  const localDB  = await getLocalDB(user.uid);
   const remoteDB = getRemoteDB(user.uid);
   if (!remoteDB) return null;
+  const localDB  = await getLocalDB(user.uid);
 
   try {
     // Pull = copy from server to local
@@ -157,9 +157,9 @@ export const startLiveSync = async (onRemoteChange) => {
   const user = await storage.loadUser();
   if (!user?.uid) return;
 
-  const localDB  = await getLocalDB(user.uid);
   const remoteDB = getRemoteDB(user.uid);
   if (!remoteDB) return;
+  const localDB  = await getLocalDB(user.uid);
 
   // Stop any existing sync first
   stopLiveSync();

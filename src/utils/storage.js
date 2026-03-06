@@ -15,6 +15,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const APP_DATA_KEY = 'pm_app_data';
 const USER_KEY     = 'pm_user';
 const DEVICE_KEY   = 'pm_device_id';
+const FIREBASE_CONFIG_KEY = 'pm_firebase_config';
+const PENDING_SYNC_KEY = 'pm_pending_sync';
 
 export const storage = {
 
@@ -60,6 +62,50 @@ export const storage = {
     await AsyncStorage.removeItem(USER_KEY);
   },
 
+  // ─── Firebase sync config ───────────────────────────────────────────────
+  saveFirebaseConfig: async (config) => {
+    try {
+      await AsyncStorage.setItem(FIREBASE_CONFIG_KEY, JSON.stringify(config));
+    } catch (e) {
+      console.error('[Storage] Save Firebase config failed:', e);
+    }
+  },
+
+  loadFirebaseConfig: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(FIREBASE_CONFIG_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  clearFirebaseConfig: async () => {
+    await AsyncStorage.removeItem(FIREBASE_CONFIG_KEY);
+  },
+
+  // ─── Pending cloud sync payload (offline queue) ────────────────────────
+  savePendingSync: async (payload) => {
+    try {
+      await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(payload));
+    } catch (e) {
+      console.error('[Storage] Save pending sync failed:', e);
+    }
+  },
+
+  loadPendingSync: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(PENDING_SYNC_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  clearPendingSync: async () => {
+    await AsyncStorage.removeItem(PENDING_SYNC_KEY);
+  },
+
   // ─── Device ID ──────────────────────────────────────────────────────────
   // Each device gets a unique ID so we can ignore our own sync updates
   getDeviceId: async () => {
@@ -77,6 +123,6 @@ export const storage = {
 
   // ─── Clear everything (logout / reset) ─────────────────────────────────
   clearAll: async () => {
-    await AsyncStorage.multiRemove([APP_DATA_KEY, USER_KEY]);
+    await AsyncStorage.multiRemove([APP_DATA_KEY, USER_KEY, PENDING_SYNC_KEY]);
   },
 };

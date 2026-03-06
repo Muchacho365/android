@@ -6,8 +6,7 @@
  * all your app data. Any screen can read from it or update it.
  * When it updates, only the components using that data re-render.
  *
- * This mirrors the exact same data shape as the Electron app —
- * so when synced via CouchDB, both apps understand each other's data.
+ * This mirrors the app data shape used for local storage and Firebase sync.
  */
 
 import { create } from 'zustand';
@@ -98,7 +97,7 @@ const useStore = create((set, get) => ({
     set({ saveStatus: 'saved' });
 
     // Trigger cloud sync push (imported lazily to avoid circular deps)
-    const { pushToCloud } = await import('../sync/pouchSync');
+    const { pushToCloud } = await import('../sync/firebaseSync');
     pushToCloud(snapshot).catch(console.warn);
   },
 

@@ -14,7 +14,12 @@ import { Ionicons } from '@expo/vector-icons';
 import useStore from '../store';
 import { colors, spacing, radius, font, cardStyle } from '../theme';
 import { storage } from '../utils/storage';
-import { pushToCloud, pullFromCloud, isSyncConfigured } from '../sync/pouchSync';
+import {
+  pushToCloud,
+  pullFromCloud,
+  isSyncConfigured,
+  refreshSyncConfig,
+} from '../sync/firebaseSync';
 
 export default function SettingsScreen({ onLogout }) {
   const user        = useStore(s => s.user);
@@ -24,12 +29,38 @@ export default function SettingsScreen({ onLogout }) {
   const applyData   = useStore(s => s.applyData);
 
   const [syncing,      setSyncing]      = useState(false);
-  const [showCouchDB,  setShowCouchDB]  = useState(false);
-  const [couchUrl,     setCouchUrl]     = useState('');
+  const [showFirebaseConfig, setShowFirebaseConfig] = useState(false);
+  const [firebaseConfigText, setFirebaseConfigText] = useState('');
+  const [configured, setConfigured] = useState(false);
+
+  useEffect(() => {
+    const loadSyncConfig = async () => {
+      const cfg = await storage.loadFirebaseConfig();
+      if (cfg) {
+        setFirebaseConfigText(JSON.stringify(cfg, null, 2));
+      }
+      setConfigured(await refreshSyncConfig());
+    };
+    loadSyncConfig();
+  }, []);
+
+  const parseFirebaseConfig = () => {
+    try {
+      const parsed = JSON.parse(firebaseConfigText);
+      const required = ['apiKey', 'authDomain', 'projectId', 'appId'];
+      const missing = required.filter((k) => !parsed?.[k]);
+      if (missing.length) {
+        return { error: `Missing required field(s): ${missing.join(', ')}` };
+      }
+      return { value: parsed };
+    } catch {
+      return { error: 'Firebase config must be valid JSON.' };
+    }
+  };
 
   // ─── Manual sync ─────────────────────────────────────────────────────────
   const handleSync = async () => {
-    if (!isSyncConfigured()) { setShowCouchDB(true); return; }
+    if (!isSyncConfigured()) { setShowFirebaseConfig(true); return; }
     setSyncing(true);
     setSyncStatus('syncing');
     try {
@@ -45,7 +76,7 @@ export default function SettingsScreen({ onLogout }) {
   };
 
   const handlePull = async () => {
-    if (!isSyncConfigured()) { setShowCouchDB(true); return; }
+    if (!isSyncConfigured()) { setShowFirebaseConfig(true); return; }
     setSyncing(true);
     try {
       const data = await pullFromCloud();
@@ -121,9 +152,9 @@ export default function SettingsScreen({ onLogout }) {
             {syncStatus === 'synced' ? '✅ Synced' : syncStatus === 'error' ? '❌ Sync error' : syncStatus === 'syncing' ? '🔄 Syncing...' : '☁️ Cloud Sync'}
           </Text>
           <Text style={styles.syncBannerDesc}>
-            {isSyncConfigured()
-              ? 'CouchDB configured. Same email on Electron = same data.'
-              : 'Configure your CouchDB URL to enable cross-device sync with your Electron app.'}
+            {configured
+              ? 'Firebase configured. Offline edits save locally and sync when internet is available.'
+              : 'Add your Firebase Web config JSON to enable cloud sync.'}
           </Text>
         </View>
 
@@ -148,21 +179,21 @@ export default function SettingsScreen({ onLogout }) {
           <View style={styles.divider} />
           <SettingRow
             icon="settings-outline"
-            label="Configure CouchDB"
-            desc={isSyncConfigured() ? 'URL configured ✓' : 'Tap to enter your CouchDB URL'}
-            onPress={() => setShowCouchDB(true)}
+            label="Configure Firebase"
+            desc={configured ? 'Firebase config saved ✓' : 'Paste Firebase Web config JSON'}
+            onPress={() => setShowFirebaseConfig(true)}
             color={colors.orange}
           />
         </View>
 
         {/* How sync works */}
         <View style={styles.infoBox}>
-          <Text style={styles.infoTitle}>🔄 How sync works with Electron</Text>
+          <Text style={styles.infoTitle}>🔄 How sync works with Firebase</Text>
           <Text style={styles.infoText}>
-            1. Both apps connect to the same CouchDB server{'\n'}
-            2. They use your email as the user ID{'\n'}
-            3. Changes on either device sync in real-time{'\n'}
-            4. Works offline — changes queue and sync when back online
+            1. Every change is saved locally first (offline-first){'\n'}
+            2. Sync pushes your latest data to Firestore when online{'\n'}
+            3. Other devices with same email receive updates{'\n'}
+            4. Offline updates are retried automatically
           </Text>
         </View>
 
@@ -194,42 +225,43 @@ export default function SettingsScreen({ onLogout }) {
 
       </ScrollView>
 
-      {/* CouchDB Modal */}
-      <Modal visible={showCouchDB} transparent animationType="slide">
-        <Pressable style={styles.overlay} onPress={() => setShowCouchDB(false)}>
+      {/* Firebase Config Modal */}
+      <Modal visible={showFirebaseConfig} transparent animationType="slide">
+        <Pressable style={styles.overlay} onPress={() => setShowFirebaseConfig(false)}>
           <Pressable style={styles.modal} onPress={e => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Configure CouchDB</Text>
+            <Text style={styles.modalTitle}>Configure Firebase</Text>
             <Text style={styles.modalDesc}>
-              Enter your CouchDB or IBM Cloudant URL.{'\n'}
-              Format: https://user:password@host.com
+              Paste your Firebase Web config JSON from Project settings.
             </Text>
             <TextInput
               style={styles.input}
-              placeholder="https://user:pass@yourserver.com"
+              placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'
               placeholderTextColor={colors.muted}
-              value={couchUrl}
-              onChangeText={setCouchUrl}
-              autoCapitalize="none"
+              value={firebaseConfigText}
+              onChangeText={setFirebaseConfigText}
               autoCorrect={false}
-              keyboardType="url"
+              multiline
+              numberOfLines={8}
             />
             <Text style={styles.modalNote}>
-              This URL is stored only on this device. Both your Electron app and this app need the same URL.
+              Config stays on this device. Use the same Firebase project on your other devices.
             </Text>
             <TouchableOpacity
-              style={[styles.saveBtn, !couchUrl.trim() && { opacity:0.4 }]}
-              disabled={!couchUrl.trim()}
-              onPress={() => {
-                // In production: save to encrypted storage
-                // For now: alert the user that they need to update pouchSync.js
-                Alert.alert(
-                  'Almost there!',
-                  `Open src/sync/pouchSync.js and replace YOUR_COUCHDB_URL_HERE with:\n\n${couchUrl.trim()}`,
-                  [{ text: 'Got it', onPress: () => setShowCouchDB(false) }]
-                );
+              style={[styles.saveBtn, !firebaseConfigText.trim() && { opacity:0.4 }]}
+              disabled={!firebaseConfigText.trim()}
+              onPress={async () => {
+                const parsed = parseFirebaseConfig();
+                if (parsed.error) {
+                  Alert.alert('Invalid Firebase config', parsed.error);
+                  return;
+                }
+                await storage.saveFirebaseConfig(parsed.value);
+                setConfigured(await refreshSyncConfig());
+                setShowFirebaseConfig(false);
+                Alert.alert('Saved', 'Firebase sync is configured for this device.');
               }}
             >
-              <Text style={styles.saveBtnText}>Save URL</Text>
+              <Text style={styles.saveBtnText}>Save Config</Text>
             </TouchableOpacity>
           </Pressable>
         </Pressable>

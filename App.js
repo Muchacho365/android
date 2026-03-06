@@ -10,7 +10,7 @@
  * STARTUP FLOW:
  * 1. App loads
  * 2. Check AsyncStorage for saved user session
- * 3. If found → load their local data → start live sync → go to main
+ * 3. If found → load their local data → start Firebase live sync → go to main
  * 4. If not found → show LoginScreen
  */
 
@@ -34,7 +34,8 @@ import {
 	startLiveSync,
 	stopLiveSync,
 	pullFromCloud,
-} from "./src/sync/pouchSync";
+	refreshSyncConfig,
+} from "./src/sync/firebaseSync";
 import { colors, font } from "./src/theme";
 
 const Tab = createBottomTabNavigator();
@@ -71,6 +72,8 @@ export default function App() {
 	// ─── On app start ─────────────────────────────────────────────────────────
 	useEffect(() => {
 		const init = async () => {
+			await refreshSyncConfig();
+
 			// 1. Check for saved session
 			const savedUser = await storage.loadUser();
 
@@ -96,8 +99,7 @@ export default function App() {
 				})
 				.catch(() => {}); // Silently fail if offline
 
-			// 4. Start live sync — listen for real-time changes from Electron
-			// This is what makes both apps stay in sync automatically
+			// 4. Start live sync — listen for real-time changes from Firebase
 			startLiveSync((remoteData) => {
 				console.log("[App] Remote change received, updating UI...");
 				applyData(remoteData);

@@ -1,111 +1,90 @@
-# Personal Manager — React Native
+# Personal Manager (Expo + Firebase Offline-First Sync)
 
-## Project Structure
+This app now uses:
+- `AsyncStorage` for local/offline data (always-first write)
+- `Firebase Firestore` for cloud sync between devices
 
+## How Sync Works
+
+1. Any change in app state is saved locally first (`AsyncStorage`).
+2. The app tries to push the latest snapshot to Firestore.
+3. If internet is unavailable, the payload is queued locally.
+4. A retry loop pushes queued changes when connection returns.
+5. A Firestore live listener pulls updates from other devices.
+
+Result: offline-first behavior with cross-device sync when online.
+
+## Current Architecture
+
+- Local data store: `src/utils/storage.js`
+- Sync engine: `src/sync/firebaseSync.js`
+- Global state: `src/store/index.js` (Zustand)
+- Startup + listener wiring: `App.js`
+- Sync controls + Firebase config UI: `src/screens/SettingsScreen.js`
+
+## 1. Firebase Project Setup
+
+1. Open [Firebase Console](https://console.firebase.google.com/)
+2. Create a project
+3. Add a **Web app** to the project
+4. Copy the Firebase config object (`apiKey`, `authDomain`, `projectId`, `appId`, etc.)
+5. In Firebase Console, enable **Firestore Database** (Production or Test mode)
+
+## 2. Firestore Security Rules
+
+Because this app currently uses deterministic UID from email (no Firebase Auth yet), use a controlled rule for development first:
+
+```txt
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /pm_user_data/{userId} {
+      allow read, write: if true;
+    }
+  }
+}
 ```
-PersonalManagerRN/
-├── App.js                          ← Root: navigation + auth flow
-├── src/
-│   ├── theme/index.js              ← All colors, spacing, fonts
-│   ├── store/index.js              ← Global state (Zustand)
-│   ├── utils/
-│   │   ├── storage.js              ← AsyncStorage (local persistence)
-│   │   └── helpers.js              ← uuid, formatDate, etc.
-│   ├── sync/
-│   │   └── pouchSync.js            ← PouchDB ↔ CouchDB sync engine
-│   └── screens/
-│       ├── LoginScreen.js          ← Email identity
-│       ├── TodosScreen.js          ← Kanban board
-│       ├── NotesScreen.js          ← Notes grid
-│       ├── BooksScreen.js          ← Reading tracker
-│       ├── VideosScreen.js         ← Watch list
-│       └── SettingsScreen.js       ← Sync config, export, logout
-```
 
-## Setup
+Important: this is open for development only. Lock it down once Firebase Auth is added.
 
-### 1. Install dependencies
+## 3. Install / Run
+
 ```bash
 npm install
+npx expo start -c --android
 ```
 
-### 2. Start the app
-```bash
-npx expo start --android
-```
-Scan the QR code with Expo Go app on your phone.
+## 4. Configure Firebase in the App
 
----
+1. Open **Settings**
+2. Tap **Configure Firebase**
+3. Paste your Firebase web config JSON
+4. Tap **Save Config**
 
-## Connect Sync with Electron App
+Example:
 
-### Step 1 — Get a CouchDB server
-
-**Option A: IBM Cloudant (free, hosted)**
-1. Go to https://cloud.ibm.com → create account
-2. Search "Cloudant" → create instance (Lite plan = free)
-3. Go to Service credentials → New credential → copy the URL
-   Format: `https://apikey-xxx:password@accountname.cloudant.com`
-
-**Option B: Self-hosted CouchDB**
-```bash
-docker run -d -p 5984:5984 -e COUCHDB_USER=admin -e COUCHDB_PASSWORD=password couchdb:latest
-# URL: http://admin:password@localhost:5984
+```json
+{
+  "apiKey": "AIza...",
+  "authDomain": "your-project.firebaseapp.com",
+  "projectId": "your-project-id",
+  "storageBucket": "your-project.appspot.com",
+  "messagingSenderId": "123456789",
+  "appId": "1:123456789:web:abcdef"
+}
 ```
 
-### Step 2 — Add URL to React Native app
+## 5. Cross-Device Sync Test
 
-Open `src/sync/pouchSync.js` and replace:
-```js
-const COUCHDB_URL = 'YOUR_COUCHDB_URL_HERE';
-```
-with your actual URL.
+1. Device A: login with email `you@example.com`
+2. Device B: login with same email
+3. Add or edit a todo/note/book/video on A
+4. B should receive update via Firestore snapshot listener
+5. Turn off internet on A, make changes, then reconnect: queued snapshot syncs automatically
 
-### Step 3 — Add same URL to Electron app
+## Notes / Limits
 
-In your Electron app's sync module, use the same CouchDB URL.
-The Electron app uses PouchDB too — same protocol, same server.
-
-Both apps use the same email → same uid → same database name: `pm_{uid}`
-
-### Step 4 — Test sync
-
-1. Open RN app → Login with email
-2. Open Electron app → Login with same email
-3. Add a todo in the RN app
-4. Watch it appear in Electron within 1-2 seconds ✓
-
----
-
-## How the sync actually works
-
-```
-RN App (Android)                Electron App (Desktop)
-     │                                  │
-     │  PouchDB (local)                 │  PouchDB (local)
-     │      │                           │      │
-     │      │ replicate                 │      │ replicate
-     │      ▼                           │      ▼
-     └──────────► CouchDB Server ◄──────┘
-                  /pm_{uid}/
-                  (your data)
-```
-
-1. You save data → stored in local PouchDB first
-2. PouchDB replicates to CouchDB server (push)
-3. Other device's PouchDB gets notified (live sync)
-4. Other device pulls the change
-5. UI updates automatically
-
-Offline: changes queue in local PouchDB, sync when reconnected.
-
----
-
-## Adding Securities screen
-
-The Securities screen (Passwords, API Keys, Cards) follows the same
-pattern as the other screens. The encryption uses react-native-encrypted-storage
-for proper hardware-backed encryption on Android.
-
-To add it: create `src/screens/SecuritiesScreen.js` following the
-same pattern as `TodosScreen.js`, using the store's password/api/card actions.
+- Current sync is snapshot-based (latest full state wins).
+- Conflict handling is last-write-wins.
+- For stronger conflict resolution, move to per-entity docs with revisioning.
+- The old PouchDB/CouchDB sync module remains in the repo but is no longer used.

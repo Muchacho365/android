@@ -5,7 +5,7 @@
  * 1. User enters email
  * 2. We generate a uid from the email (SHA-like hash)
  * 3. Save user to local storage
- * 4. App loads their data from CouchDB under that uid
+ * 4. App syncs their data from Firebase under that uid
  *
  * For production magic link: integrate with any auth provider
  * that supports email (Firebase Auth, Supabase, etc.) and
@@ -121,7 +121,7 @@ export default function LoginScreen({ onLogin }) {
           <View style={styles.infoBox}>
             <Text style={styles.infoTitle}>🔄 How sync works</Text>
             <Text style={styles.infoText}>
-              Use the same email on your Windows app and this phone — your todos, notes, books, and everything else will stay in sync automatically.
+              Use the same email on all devices and the app will keep your data in sync through Firebase.
             </Text>
           </View>
 
