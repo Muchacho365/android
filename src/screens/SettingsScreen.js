@@ -3,11 +3,10 @@
  * Sync settings, export/import, user info, logout
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ScrollView, Alert, ActivityIndicator, Share,
-  TextInput, Modal, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +16,6 @@ import { storage } from '../utils/storage';
 import {
   pushToCloud,
   pullFromCloud,
-  isSyncConfigured,
-  refreshSyncConfig,
 } from '../sync/firebaseSync';
 
 export default function SettingsScreen({ onLogout }) {
@@ -29,38 +26,9 @@ export default function SettingsScreen({ onLogout }) {
   const applyData   = useStore(s => s.applyData);
 
   const [syncing,      setSyncing]      = useState(false);
-  const [showFirebaseConfig, setShowFirebaseConfig] = useState(false);
-  const [firebaseConfigText, setFirebaseConfigText] = useState('');
-  const [configured, setConfigured] = useState(false);
-
-  useEffect(() => {
-    const loadSyncConfig = async () => {
-      const cfg = await storage.loadFirebaseConfig();
-      if (cfg) {
-        setFirebaseConfigText(JSON.stringify(cfg, null, 2));
-      }
-      setConfigured(await refreshSyncConfig());
-    };
-    loadSyncConfig();
-  }, []);
-
-  const parseFirebaseConfig = () => {
-    try {
-      const parsed = JSON.parse(firebaseConfigText);
-      const required = ['apiKey', 'authDomain', 'projectId', 'appId'];
-      const missing = required.filter((k) => !parsed?.[k]);
-      if (missing.length) {
-        return { error: `Missing required field(s): ${missing.join(', ')}` };
-      }
-      return { value: parsed };
-    } catch {
-      return { error: 'Firebase config must be valid JSON.' };
-    }
-  };
 
   // ─── Manual sync ─────────────────────────────────────────────────────────
   const handleSync = async () => {
-    if (!isSyncConfigured()) { setShowFirebaseConfig(true); return; }
     setSyncing(true);
     setSyncStatus('syncing');
     try {
@@ -76,7 +44,6 @@ export default function SettingsScreen({ onLogout }) {
   };
 
   const handlePull = async () => {
-    if (!isSyncConfigured()) { setShowFirebaseConfig(true); return; }
     setSyncing(true);
     try {
       const data = await pullFromCloud();
@@ -152,9 +119,7 @@ export default function SettingsScreen({ onLogout }) {
             {syncStatus === 'synced' ? '✅ Synced' : syncStatus === 'error' ? '❌ Sync error' : syncStatus === 'syncing' ? '🔄 Syncing...' : '☁️ Cloud Sync'}
           </Text>
           <Text style={styles.syncBannerDesc}>
-            {configured
-              ? 'Firebase configured. Offline edits save locally and sync when internet is available.'
-              : 'Add your Firebase Web config JSON to enable cloud sync.'}
+            Firebase is configured. Offline edits save locally and sync when internet is available.
           </Text>
         </View>
 
@@ -175,14 +140,6 @@ export default function SettingsScreen({ onLogout }) {
             onPress={handlePull}
             loading={syncing}
             color={colors.green}
-          />
-          <View style={styles.divider} />
-          <SettingRow
-            icon="settings-outline"
-            label="Configure Firebase"
-            desc={configured ? 'Firebase config saved ✓' : 'Paste Firebase Web config JSON'}
-            onPress={() => setShowFirebaseConfig(true)}
-            color={colors.orange}
           />
         </View>
 
@@ -224,48 +181,6 @@ export default function SettingsScreen({ onLogout }) {
         <Text style={styles.version}>Personal Manager v1.0.0</Text>
 
       </ScrollView>
-
-      {/* Firebase Config Modal */}
-      <Modal visible={showFirebaseConfig} transparent animationType="slide">
-        <Pressable style={styles.overlay} onPress={() => setShowFirebaseConfig(false)}>
-          <Pressable style={styles.modal} onPress={e => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Configure Firebase</Text>
-            <Text style={styles.modalDesc}>
-              Paste your Firebase Web config JSON from Project settings.
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'
-              placeholderTextColor={colors.muted}
-              value={firebaseConfigText}
-              onChangeText={setFirebaseConfigText}
-              autoCorrect={false}
-              multiline
-              numberOfLines={8}
-            />
-            <Text style={styles.modalNote}>
-              Config stays on this device. Use the same Firebase project on your other devices.
-            </Text>
-            <TouchableOpacity
-              style={[styles.saveBtn, !firebaseConfigText.trim() && { opacity:0.4 }]}
-              disabled={!firebaseConfigText.trim()}
-              onPress={async () => {
-                const parsed = parseFirebaseConfig();
-                if (parsed.error) {
-                  Alert.alert('Invalid Firebase config', parsed.error);
-                  return;
-                }
-                await storage.saveFirebaseConfig(parsed.value);
-                setConfigured(await refreshSyncConfig());
-                setShowFirebaseConfig(false);
-                Alert.alert('Saved', 'Firebase sync is configured for this device.');
-              }}
-            >
-              <Text style={styles.saveBtnText}>Save Config</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
 
     </SafeAreaView>
   );
@@ -318,12 +233,4 @@ const styles = StyleSheet.create({
 
   version: { textAlign:'center', fontSize: font.xs, color: colors.muted, marginTop: spacing.xl },
 
-  overlay: { flex:1, backgroundColor:'rgba(0,0,0,0.6)', justifyContent:'flex-end' },
-  modal: { backgroundColor: colors.card, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.xl, paddingBottom: spacing.xxxl },
-  modalTitle: { fontSize: font.lg, fontWeight: font.bold, color:'#fff', marginBottom: spacing.sm },
-  modalDesc:  { fontSize: font.sm, color: colors.textSoft, lineHeight:20, marginBottom: spacing.lg },
-  input: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth:1, borderColor: colors.border, color: colors.text, padding: spacing.lg, fontSize: font.sm, marginBottom: spacing.sm, fontFamily:'monospace' },
-  modalNote: { fontSize: font.xs, color: colors.muted, lineHeight:17, marginBottom: spacing.lg },
-  saveBtn: { backgroundColor: colors.accent, borderRadius: radius.md, padding: spacing.lg, alignItems:'center' },
-  saveBtnText: { color:'#fff', fontWeight: font.bold, fontSize: font.md },
 });

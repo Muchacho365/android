@@ -15,7 +15,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const APP_DATA_KEY = 'pm_app_data';
 const USER_KEY     = 'pm_user';
 const DEVICE_KEY   = 'pm_device_id';
-const FIREBASE_CONFIG_KEY = 'pm_firebase_config';
 const PENDING_SYNC_KEY = 'pm_pending_sync';
 
 export const storage = {
@@ -60,28 +59,6 @@ export const storage = {
 
   clearUser: async () => {
     await AsyncStorage.removeItem(USER_KEY);
-  },
-
-  // ─── Firebase sync config ───────────────────────────────────────────────
-  saveFirebaseConfig: async (config) => {
-    try {
-      await AsyncStorage.setItem(FIREBASE_CONFIG_KEY, JSON.stringify(config));
-    } catch (e) {
-      console.error('[Storage] Save Firebase config failed:', e);
-    }
-  },
-
-  loadFirebaseConfig: async () => {
-    try {
-      const raw = await AsyncStorage.getItem(FIREBASE_CONFIG_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      return null;
-    }
-  },
-
-  clearFirebaseConfig: async () => {
-    await AsyncStorage.removeItem(FIREBASE_CONFIG_KEY);
   },
 
   // ─── Pending cloud sync payload (offline queue) ────────────────────────

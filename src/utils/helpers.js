@@ -3,14 +3,14 @@
  */
 
 import 'react-native-get-random-values'; // Required for uuid on RN
-import { v4 as uuidv4 } from 'react-native-uuid';
+import uuidLib from 'react-native-uuid';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { Alert, Clipboard } from 'react-native';
 
 dayjs.extend(relativeTime);
 
-export const uuid = () => uuidv4();
+export const uuid = () => String(uuidLib.v4());
 
 export const formatDate = (dateStr) => {
   if (!dateStr) return '';

@@ -11,41 +11,32 @@ import { storage } from "../utils/storage";
 
 const SYNC_COLLECTION = "pm_user_data";
 const SYNC_RETRY_MS = 15000;
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDmdwlNKJ3Cb8Ev4RwZCPiyxamlL5WWn90",
+  authDomain: "multidevice-personal-app.firebaseapp.com",
+  projectId: "multidevice-personal-app",
+  storageBucket: "multidevice-personal-app.firebasestorage.app",
+  messagingSenderId: "362447091949",
+  appId: "1:362447091949:web:e73ba030b3ef621c4274e4",
+  measurementId: "G-GSYF57E2BZ",
+};
 
 let _db = null;
 let _deviceId = null;
 let _syncUnsubscribe = null;
 let _syncRetryTimer = null;
-let _isConfigured = false;
-
-const hasRequiredConfig = (config) =>
-  Boolean(
-    config &&
-      config.apiKey &&
-      config.authDomain &&
-      config.projectId &&
-      config.appId
-  );
+let _isConfigured = true;
 
 export const refreshSyncConfig = async () => {
-  const config = await storage.loadFirebaseConfig();
-  _isConfigured = hasRequiredConfig(config);
+  _isConfigured = true;
   return _isConfigured;
 };
 
 export const isSyncConfigured = () => _isConfigured;
 
 const getFirestoreDb = async () => {
-  const config = await storage.loadFirebaseConfig();
-  if (!hasRequiredConfig(config)) {
-    _isConfigured = false;
-    return null;
-  }
-
-  _isConfigured = true;
-
   if (!_db) {
-    const app = getApps().length ? getApp() : initializeApp(config);
+    const app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
     _db = getFirestore(app);
   }
 

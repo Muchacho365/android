@@ -20,7 +20,7 @@ Result: offline-first behavior with cross-device sync when online.
 - Sync engine: `src/sync/firebaseSync.js`
 - Global state: `src/store/index.js` (Zustand)
 - Startup + listener wiring: `App.js`
-- Sync controls + Firebase config UI: `src/screens/SettingsScreen.js`
+- Sync controls UI: `src/screens/SettingsScreen.js`
 
 ## 1. Firebase Project Setup
 
@@ -54,27 +54,11 @@ npm install
 npx expo start -c --android
 ```
 
-## 4. Configure Firebase in the App
+## 4. Add Firebase Config in Code (Developer Step)
 
-1. Open **Settings**
-2. Tap **Configure Firebase**
-3. Paste your Firebase web config JSON
-4. Tap **Save Config**
+Edit `src/sync/firebaseSync.js` and set `FIREBASE_CONFIG` to your Firebase web config object.
 
-Example:
-
-```json
-{
-  "apiKey": "AIza...",
-  "authDomain": "your-project.firebaseapp.com",
-  "projectId": "your-project-id",
-  "storageBucket": "your-project.appspot.com",
-  "messagingSenderId": "123456789",
-  "appId": "1:123456789:web:abcdef"
-}
-```
-
-## 5. Cross-Device Sync Test
+## 5. Cross-Device Sync Test (User Flow)
 
 1. Device A: login with email `you@example.com`
 2. Device B: login with same email
