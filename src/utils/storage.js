@@ -1,25 +1,19 @@
 /**
  * utils/storage.js — Local storage for Android
- *
- * HOW IT WORKS:
- * AsyncStorage is React Native's equivalent of localStorage.
- * It stores data as key-value pairs on the device.
- * Everything is saved as JSON string and parsed on load.
- *
- * This is the LOCAL layer — data is always saved here first,
- * before anything goes to the cloud. So the app works fully offline.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const APP_DATA_KEY = 'pm_app_data';
-const USER_KEY     = 'pm_user';
-const DEVICE_KEY   = 'pm_device_id';
+const USER_KEY = 'pm_user';
+const DEVICE_KEY = 'pm_device_id';
 const PENDING_SYNC_KEY = 'pm_pending_sync';
+const SYNC_SECTION_HASHES_KEY = 'pm_sync_section_hashes';
+const SYNC_ARRAY_INDEXES_KEY = 'pm_sync_array_indexes';
+const THEME_MODE_KEY = 'pm_theme_mode';
+const LOCK_PIN_HASH_KEY = 'pm_lock_pin_hash';
 
 export const storage = {
-
-  // ─── Save all app data ──────────────────────────────────────────────────
   save: async (data) => {
     try {
       await AsyncStorage.setItem(APP_DATA_KEY, JSON.stringify(data));
@@ -28,7 +22,6 @@ export const storage = {
     }
   },
 
-  // ─── Load all app data ──────────────────────────────────────────────────
   load: async () => {
     try {
       const raw = await AsyncStorage.getItem(APP_DATA_KEY);
@@ -39,7 +32,6 @@ export const storage = {
     }
   },
 
-  // ─── User session ───────────────────────────────────────────────────────
   saveUser: async (user) => {
     try {
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -52,7 +44,7 @@ export const storage = {
     try {
       const raw = await AsyncStorage.getItem(USER_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   },
@@ -61,7 +53,6 @@ export const storage = {
     await AsyncStorage.removeItem(USER_KEY);
   },
 
-  // ─── Pending cloud sync payload (offline queue) ────────────────────────
   savePendingSync: async (payload) => {
     try {
       await AsyncStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(payload));
@@ -74,7 +65,7 @@ export const storage = {
     try {
       const raw = await AsyncStorage.getItem(PENDING_SYNC_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   },
@@ -83,8 +74,84 @@ export const storage = {
     await AsyncStorage.removeItem(PENDING_SYNC_KEY);
   },
 
-  // ─── Device ID ──────────────────────────────────────────────────────────
-  // Each device gets a unique ID so we can ignore our own sync updates
+  saveSyncSectionHashes: async (hashes) => {
+    try {
+      await AsyncStorage.setItem(SYNC_SECTION_HASHES_KEY, JSON.stringify(hashes || {}));
+    } catch (e) {
+      console.error('[Storage] Save section hashes failed:', e);
+    }
+  },
+
+  loadSyncSectionHashes: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(SYNC_SECTION_HASHES_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  },
+
+  clearSyncSectionHashes: async () => {
+    await AsyncStorage.removeItem(SYNC_SECTION_HASHES_KEY);
+  },
+
+  saveSyncArrayIndexes: async (indexes) => {
+    try {
+      await AsyncStorage.setItem(SYNC_ARRAY_INDEXES_KEY, JSON.stringify(indexes || {}));
+    } catch (e) {
+      console.error('[Storage] Save array indexes failed:', e);
+    }
+  },
+
+  loadSyncArrayIndexes: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(SYNC_ARRAY_INDEXES_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  },
+
+  clearSyncArrayIndexes: async () => {
+    await AsyncStorage.removeItem(SYNC_ARRAY_INDEXES_KEY);
+  },
+
+  saveThemeMode: async (mode) => {
+    try {
+      await AsyncStorage.setItem(THEME_MODE_KEY, mode || 'dark');
+    } catch (e) {
+      console.error('[Storage] Save theme failed:', e);
+    }
+  },
+
+  loadThemeMode: async () => {
+    try {
+      return (await AsyncStorage.getItem(THEME_MODE_KEY)) || 'dark';
+    } catch {
+      return 'dark';
+    }
+  },
+
+  saveLockPinHash: async (hash) => {
+    try {
+      await AsyncStorage.setItem(LOCK_PIN_HASH_KEY, hash || '');
+    } catch (e) {
+      console.error('[Storage] Save lock pin failed:', e);
+    }
+  },
+
+  loadLockPinHash: async () => {
+    try {
+      return (await AsyncStorage.getItem(LOCK_PIN_HASH_KEY)) || '';
+    } catch {
+      return '';
+    }
+  },
+
+  clearLockPinHash: async () => {
+    await AsyncStorage.removeItem(LOCK_PIN_HASH_KEY);
+  },
+
   getDeviceId: async () => {
     try {
       let id = await AsyncStorage.getItem(DEVICE_KEY);
@@ -93,13 +160,20 @@ export const storage = {
         await AsyncStorage.setItem(DEVICE_KEY, id);
       }
       return id;
-    } catch (e) {
+    } catch {
       return 'rn_device_unknown';
     }
   },
 
-  // ─── Clear everything (logout / reset) ─────────────────────────────────
   clearAll: async () => {
-    await AsyncStorage.multiRemove([APP_DATA_KEY, USER_KEY, PENDING_SYNC_KEY]);
+    await AsyncStorage.multiRemove([
+      APP_DATA_KEY,
+      USER_KEY,
+      PENDING_SYNC_KEY,
+      SYNC_SECTION_HASHES_KEY,
+      SYNC_ARRAY_INDEXES_KEY,
+      THEME_MODE_KEY,
+      LOCK_PIN_HASH_KEY,
+    ]);
   },
 };

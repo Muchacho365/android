@@ -1,229 +1,294 @@
-/**
- * store/index.js — Global state using Zustand
- *
- * HOW IT WORKS:
- * Zustand is a tiny state manager. Think of it as a box that holds
- * all your app data. Any screen can read from it or update it.
- * When it updates, only the components using that data re-render.
- *
- * This mirrors the app data shape used for local storage and Firebase sync.
- */
-
 import { create } from 'zustand';
 import { storage } from '../utils/storage';
-
-// ─── Data Models (same schema as Electron app) ───────────────────────────────
-//
-// Todo:     { id, text, status: 'todo'|'in-progress'|'done', priority, dueDate, updatedAt }
-// Note:     { id, title, content, color, pinned, category, createdAt, updatedAt }
-// Book:     { id, title, author, status, currentPage, totalPages, color, notes[], createdAt }
-// Video:    { id, title, url, platform, watched, category, createdAt }
-// Password: { id, site, username, password(encrypted), notes, updatedAt }
-// ApiKey:   { id, name, key(encrypted), service, notes, updatedAt }
-// Card:     { id, bank, last4, expiry, type, notes, updatedAt }
-// Event:    { id, title, start, end, type, color, description, completed }
+import { buildAiSnapshot, summarizeNote as summarizeNoteText } from '../utils/ai';
 
 const useStore = create((set, get) => ({
+  isLoading: true,
+  saveStatus: 'saved',
+  syncStatus: 'idle',
+  isOnline: true,
+  user: null,
+  themeMode: 'dark',
 
-  // ─── App UI state ───────────────────────────────────────────────────────
-  isLoading:    true,
-  saveStatus:   'saved',   // 'saved' | 'saving'
-  syncStatus:   'idle',    // 'idle' | 'syncing' | 'synced' | 'error'
-  isOnline:     true,
-  user:         null,      // { email, uid }
-
-  // ─── Data ───────────────────────────────────────────────────────────────
-  todos:     [],
-  notes:     [],
-  books:     [],
-  videos:    [],
+  todos: [],
+  notes: [],
+  books: [],
+  videos: [],
   passwords: [],
-  apis:      [],
-  cards:     [],
-  events:    [],
+  apis: [],
+  cards: [],
+  events: [],
 
-  // ─── AI results (cached) ────────────────────────────────────────────────
-  aiAnalysis:      null,
+  aiAnalysis: null,
   prioritizedTodos: null,
-  securityHealth:  null,
-  dailyBriefing:   null,
-
-  // ─── Actions ────────────────────────────────────────────────────────────
+  securityHealth: null,
+  dailyBriefing: null,
 
   setUser: (user) => set({ user }),
-
   setSyncStatus: (syncStatus) => set({ syncStatus }),
+  setThemeMode: async (themeMode) => {
+    await storage.saveThemeMode(themeMode);
+    set({ themeMode });
+  },
 
-  // Called after loading data from local storage or cloud
-  applyData: (data) => set({
-    todos:      data.todos      || [],
-    notes:      data.notes      || [],
-    books:      data.books      || [],
-    videos:     data.videos     || [],
-    passwords:  data.passwords  || [],
-    apis:       data.apis       || [],
-    cards:      data.cards      || [],
-    events:     data.events     || [],
-    aiAnalysis:       data.aiAnalysis       || null,
-    prioritizedTodos: data.prioritizedTodos || null,
-    securityHealth:   data.securityHealth   || null,
-    dailyBriefing:    data.dailyBriefing    || null,
+  hydrateThemeMode: async () => {
+    const themeMode = await storage.loadThemeMode();
+    set({ themeMode: themeMode || 'dark' });
+  },
+
+  mergeArrayDelta: (currentItems, delta) => {
+    const existing = Array.isArray(currentItems) ? [...currentItems] : [];
+    const removeIds = new Set((delta?.remove || []).map((id) => String(id)));
+    const upsertItems = Array.isArray(delta?.upsert) ? delta.upsert : [];
+
+    const filtered = existing.filter(
+      (item) => !removeIds.has(String(item?.id ?? ''))
+    );
+    const indexById = new Map(
+      filtered.map((item, index) => [String(item?.id ?? ''), index])
+    );
+
+    upsertItems.forEach((item) => {
+      const itemId = String(item?.id ?? '');
+      if (!itemId) return;
+
+      if (indexById.has(itemId)) {
+        filtered[indexById.get(itemId)] = item;
+        return;
+      }
+
+      filtered.unshift(item);
+      indexById.set(itemId, 0);
+    });
+
+    return filtered;
+  },
+
+  applyData: (data) =>
+    set((state) => {
+      const patch = {};
+      const mergeArray = get().mergeArrayDelta;
+
+      if (data.__delta && typeof data.__delta === 'object') {
+        if (data.__delta.todos) patch.todos = mergeArray(state.todos, data.__delta.todos);
+        if (data.__delta.notes) patch.notes = mergeArray(state.notes, data.__delta.notes);
+        if (data.__delta.books) patch.books = mergeArray(state.books, data.__delta.books);
+        if (data.__delta.videos) patch.videos = mergeArray(state.videos, data.__delta.videos);
+        if (data.__delta.passwords) patch.passwords = mergeArray(state.passwords, data.__delta.passwords);
+        if (data.__delta.apis) patch.apis = mergeArray(state.apis, data.__delta.apis);
+        if (data.__delta.cards) patch.cards = mergeArray(state.cards, data.__delta.cards);
+        if (data.__delta.events) patch.events = mergeArray(state.events, data.__delta.events);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, 'todos')) patch.todos = data.todos || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'notes')) patch.notes = data.notes || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'books')) patch.books = data.books || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'videos')) patch.videos = data.videos || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'passwords')) patch.passwords = data.passwords || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'apis')) patch.apis = data.apis || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'cards')) patch.cards = data.cards || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'events')) patch.events = data.events || [];
+      if (Object.prototype.hasOwnProperty.call(data, 'aiAnalysis')) patch.aiAnalysis = data.aiAnalysis || null;
+      if (Object.prototype.hasOwnProperty.call(data, 'prioritizedTodos')) patch.prioritizedTodos = data.prioritizedTodos || null;
+      if (Object.prototype.hasOwnProperty.call(data, 'securityHealth')) patch.securityHealth = data.securityHealth || null;
+      if (Object.prototype.hasOwnProperty.call(data, 'dailyBriefing')) patch.dailyBriefing = data.dailyBriefing || null;
+      return patch;
+    }),
+
+  setAiSnapshot: (payload) => set({
+    aiAnalysis: payload?.aiAnalysis || null,
+    prioritizedTodos: payload?.prioritizedTodos || null,
+    securityHealth: payload?.securityHealth || null,
+    dailyBriefing: payload?.dailyBriefing || null,
   }),
 
-  // Get a clean snapshot of only data (no UI state) — used for save & sync
+  refreshAiSnapshot: async () => {
+    const snapshot = buildAiSnapshot(get().getSnapshot());
+    set({
+      aiAnalysis: snapshot.aiAnalysis,
+      prioritizedTodos: snapshot.prioritizedTodos,
+      securityHealth: snapshot.securityHealth,
+      dailyBriefing: snapshot.dailyBriefing,
+    });
+    await get().save();
+    return snapshot;
+  },
+
+  summarizeNote: async (noteId) => {
+    const note = get().notes.find((item) => item.id === noteId);
+    if (!note) return null;
+
+    const aiSummary = summarizeNoteText(note);
+    set((state) => ({
+      notes: state.notes.map((item) =>
+        item.id === noteId ? { ...item, aiSummary, updatedAt: new Date().toISOString() } : item
+      ),
+    }));
+    await get().save();
+    return aiSummary;
+  },
+
   getSnapshot: () => {
     const s = get();
     return {
-      todos:      s.todos,
-      notes:      s.notes,
-      books:      s.books,
-      videos:     s.videos,
-      passwords:  s.passwords,
-      apis:       s.apis,
-      cards:      s.cards,
-      events:     s.events,
-      aiAnalysis:       s.aiAnalysis,
+      todos: s.todos,
+      notes: s.notes,
+      books: s.books,
+      videos: s.videos,
+      passwords: s.passwords,
+      apis: s.apis,
+      cards: s.cards,
+      events: s.events,
+      aiAnalysis: s.aiAnalysis,
       prioritizedTodos: s.prioritizedTodos,
-      securityHealth:   s.securityHealth,
-      dailyBriefing:    s.dailyBriefing,
+      securityHealth: s.securityHealth,
+      dailyBriefing: s.dailyBriefing,
     };
   },
 
-  // ─── Save (local first, then triggers cloud sync) ───────────────────────
   save: async () => {
     set({ saveStatus: 'saving' });
     const snapshot = get().getSnapshot();
     await storage.save(snapshot);
     set({ saveStatus: 'saved' });
 
-    // Trigger cloud sync push (imported lazily to avoid circular deps)
-    const { pushToCloud } = await import('../sync/firebaseSync');
-    pushToCloud(snapshot).catch(console.warn);
+    const { scheduleSyncPush } = await import('../sync/firebaseSync');
+    scheduleSyncPush(snapshot);
   },
 
-  // ─── TODOS ──────────────────────────────────────────────────────────────
   addTodo: (todo) => {
-    set(s => ({ todos: [todo, ...s.todos] }));
+    set((s) => ({ todos: [todo, ...s.todos] }));
     get().save();
   },
   updateTodo: (id, changes) => {
-    set(s => ({
-      todos: s.todos.map(t => t.id === id
-        ? { ...t, ...changes, updatedAt: new Date().toISOString() }
-        : t
-      )
+    set((s) => ({
+      todos: s.todos.map((todo) =>
+        todo.id === id ? { ...todo, ...changes, updatedAt: new Date().toISOString() } : todo
+      ),
     }));
     get().save();
   },
   deleteTodo: (id) => {
-    set(s => ({ todos: s.todos.filter(t => t.id !== id) }));
+    set((s) => ({ todos: s.todos.filter((todo) => todo.id !== id) }));
     get().save();
   },
 
-  // ─── NOTES ──────────────────────────────────────────────────────────────
   addNote: (note) => {
-    set(s => ({ notes: [note, ...s.notes] }));
+    set((s) => ({ notes: [note, ...s.notes] }));
     get().save();
   },
   updateNote: (id, changes) => {
-    set(s => ({
-      notes: s.notes.map(n => n.id === id
-        ? { ...n, ...changes, updatedAt: new Date().toISOString() }
-        : n
-      )
+    set((s) => ({
+      notes: s.notes.map((note) =>
+        note.id === id ? { ...note, ...changes, updatedAt: new Date().toISOString() } : note
+      ),
     }));
     get().save();
   },
   deleteNote: (id) => {
-    set(s => ({ notes: s.notes.filter(n => n.id !== id) }));
+    set((s) => ({ notes: s.notes.filter((note) => note.id !== id) }));
     get().save();
   },
 
-  // ─── BOOKS ──────────────────────────────────────────────────────────────
   addBook: (book) => {
-    set(s => ({ books: [book, ...s.books] }));
+    set((s) => ({ books: [book, ...s.books] }));
     get().save();
   },
   updateBook: (id, changes) => {
-    set(s => ({
-      books: s.books.map(b => b.id === id
-        ? { ...b, ...changes, updatedAt: new Date().toISOString() }
-        : b
-      )
+    set((s) => ({
+      books: s.books.map((book) =>
+        book.id === id ? { ...book, ...changes, updatedAt: new Date().toISOString() } : book
+      ),
     }));
     get().save();
   },
   deleteBook: (id) => {
-    set(s => ({ books: s.books.filter(b => b.id !== id) }));
+    set((s) => ({ books: s.books.filter((book) => book.id !== id) }));
     get().save();
   },
 
-  // ─── VIDEOS ─────────────────────────────────────────────────────────────
   addVideo: (video) => {
-    set(s => ({ videos: [video, ...s.videos] }));
+    set((s) => ({ videos: [video, ...s.videos] }));
     get().save();
   },
   updateVideo: (id, changes) => {
-    set(s => ({
-      videos: s.videos.map(v => v.id === id
-        ? { ...v, ...changes, updatedAt: new Date().toISOString() }
-        : v
-      )
+    set((s) => ({
+      videos: s.videos.map((video) =>
+        video.id === id ? { ...video, ...changes, updatedAt: new Date().toISOString() } : video
+      ),
     }));
     get().save();
   },
   deleteVideo: (id) => {
-    set(s => ({ videos: s.videos.filter(v => v.id !== id) }));
+    set((s) => ({ videos: s.videos.filter((video) => video.id !== id) }));
     get().save();
   },
 
-  // ─── SECURITIES ─────────────────────────────────────────────────────────
   addPassword: (item) => {
-    set(s => ({ passwords: [item, ...s.passwords] }));
+    set((s) => ({ passwords: [item, ...s.passwords] }));
     get().save();
   },
   updatePassword: (id, changes) => {
-    set(s => ({
-      passwords: s.passwords.map(p => p.id === id ? { ...p, ...changes } : p)
+    set((s) => ({
+      passwords: s.passwords.map((item) =>
+        item.id === id ? { ...item, ...changes, updatedAt: new Date().toISOString() } : item
+      ),
     }));
     get().save();
   },
   deletePassword: (id) => {
-    set(s => ({ passwords: s.passwords.filter(p => p.id !== id) }));
+    set((s) => ({ passwords: s.passwords.filter((item) => item.id !== id) }));
     get().save();
   },
 
   addApi: (item) => {
-    set(s => ({ apis: [item, ...s.apis] }));
+    set((s) => ({ apis: [item, ...s.apis] }));
+    get().save();
+  },
+  updateApi: (id, changes) => {
+    set((s) => ({
+      apis: s.apis.map((item) =>
+        item.id === id ? { ...item, ...changes, updatedAt: new Date().toISOString() } : item
+      ),
+    }));
     get().save();
   },
   deleteApi: (id) => {
-    set(s => ({ apis: s.apis.filter(a => a.id !== id) }));
+    set((s) => ({ apis: s.apis.filter((item) => item.id !== id) }));
     get().save();
   },
 
   addCard: (item) => {
-    set(s => ({ cards: [item, ...s.cards] }));
+    set((s) => ({ cards: [item, ...s.cards] }));
+    get().save();
+  },
+  updateCard: (id, changes) => {
+    set((s) => ({
+      cards: s.cards.map((item) =>
+        item.id === id ? { ...item, ...changes, updatedAt: new Date().toISOString() } : item
+      ),
+    }));
     get().save();
   },
   deleteCard: (id) => {
-    set(s => ({ cards: s.cards.filter(c => c.id !== id) }));
+    set((s) => ({ cards: s.cards.filter((item) => item.id !== id) }));
     get().save();
   },
 
-  // ─── EVENTS ─────────────────────────────────────────────────────────────
   addEvent: (event) => {
-    set(s => ({ events: [event, ...s.events] }));
+    set((s) => ({ events: [event, ...s.events] }));
     get().save();
   },
   updateEvent: (id, changes) => {
-    set(s => ({
-      events: s.events.map(e => e.id === id ? { ...e, ...changes } : e)
+    set((s) => ({
+      events: s.events.map((event) =>
+        event.id === id ? { ...event, ...changes, updatedAt: new Date().toISOString() } : event
+      ),
     }));
     get().save();
   },
   deleteEvent: (id) => {
-    set(s => ({ events: s.events.filter(e => e.id !== id) }));
+    set((s) => ({ events: s.events.filter((event) => event.id !== id) }));
     get().save();
   },
 }));

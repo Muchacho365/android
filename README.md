@@ -40,6 +40,9 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /pm_user_data/{userId} {
       allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
     }
   }
 }
@@ -54,9 +57,10 @@ npm install
 npx expo start -c --android
 ```
 
-## 4. Add Firebase Config in Code (Developer Step)
+## 4. App Login and Identity
 
-Edit `src/sync/firebaseSync.js` and set `FIREBASE_CONFIG` to your Firebase web config object.
+Use the same email on Android and Windows.
+Both apps generate the same `uid` from the email and sync to `pm_user_data/{uid}`.
 
 ## 5. Cross-Device Sync Test (User Flow)
 
@@ -71,4 +75,3 @@ Edit `src/sync/firebaseSync.js` and set `FIREBASE_CONFIG` to your Firebase web c
 - Current sync is snapshot-based (latest full state wins).
 - Conflict handling is last-write-wins.
 - For stronger conflict resolution, move to per-entity docs with revisioning.
-- The old PouchDB/CouchDB sync module remains in the repo but is no longer used.

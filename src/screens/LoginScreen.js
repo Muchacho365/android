@@ -1,51 +1,45 @@
-/**
- * screens/LoginScreen.js
- *
- * HOW AUTH WORKS HERE:
- * 1. User enters email
- * 2. We generate a uid from the email (SHA-like hash)
- * 3. Save user to local storage
- * 4. App syncs their data from Firebase under that uid
- *
- * For production magic link: integrate with any auth provider
- * that supports email (Firebase Auth, Supabase, etc.) and
- * replace the uid generation with the real uid from that provider.
- * The rest of the sync code doesn't change at all.
- */
-
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, ScrollView,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, spacing, radius, font } from '../theme';
+
+import { useAppTheme } from '../theme';
 import { storage } from '../utils/storage';
 import useStore from '../store';
 
-// Simple deterministic uid from email (no server needed for now)
-// Replace with real auth provider uid in production
 const emailToUid = (email) => {
   let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    hash = ((hash << 5) - hash) + email.charCodeAt(i);
+  for (let index = 0; index < email.length; index++) {
+    hash = ((hash << 5) - hash) + email.charCodeAt(index);
     hash |= 0;
   }
-  return 'uid_' + Math.abs(hash).toString(36) + '_' + email.split('@')[0];
+  return `uid_${Math.abs(hash).toString(36)}_${email.split('@')[0]}`;
 };
 
 export default function LoginScreen({ onLogin }) {
-  const [email,   setEmail]   = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { colors } = theme;
 
-  const setUser = useStore(s => s.setUser);
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const setUser = useStore((state) => state.setUser);
 
   const handleLogin = async () => {
     const trimmed = email.trim().toLowerCase();
     if (!trimmed || !trimmed.includes('@')) {
-      setError('Enter a valid email address');
+      setError('Enter a valid email address.');
       return;
     }
 
@@ -53,17 +47,15 @@ export default function LoginScreen({ onLogin }) {
     setError('');
 
     try {
-      const uid  = emailToUid(trimmed);
-      const user = { email: trimmed, uid };
-
-      // Save session locally
+      const user = { email: trimmed, uid: emailToUid(trimmed) };
       await storage.saveUser(user);
+      await storage.clearSyncSectionHashes();
+      await storage.clearSyncArrayIndexes();
+      await storage.clearPendingSync();
       setUser(user);
-
-      // Tell App.js we're logged in
       onLogin(user);
-    } catch (e) {
-      setError('Something went wrong. Try again.');
+    } catch (err) {
+      setError('Could not start your session. Try again.');
     } finally {
       setLoading(false);
     }
@@ -71,124 +63,94 @@ export default function LoginScreen({ onLogin }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.kav}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-
-          {/* Logo / Header */}
-          <View style={styles.header}>
+          <View style={styles.heroCard}>
             <Text style={styles.logo}>📋</Text>
             <Text style={styles.title}>Personal Manager</Text>
             <Text style={styles.subtitle}>
-              Your email is your identity.{'\n'}Same email on any device = same data.
+              Use the same email on Android and Windows. Your local data stays offline-first and syncs when the cloud is available.
             </Text>
           </View>
 
-          {/* Form */}
-          <View style={styles.form}>
-            <Text style={styles.label}>Email address</Text>
+          <View style={styles.formCard}>
+            <Text style={styles.label}>Email</Text>
             <TextInput
               style={[styles.input, error ? styles.inputError : null]}
               placeholder="you@example.com"
               placeholderTextColor={colors.muted}
               value={email}
-              onChangeText={t => { setEmail(t); setError(''); }}
+              onChangeText={(value) => {
+                setEmail(value);
+                setError('');
+              }}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus
-              onSubmitEditing={handleLogin}
               returnKeyType="go"
+              onSubmitEditing={handleLogin}
             />
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
 
-            <TouchableOpacity
-              style={[styles.btn, loading && styles.btnDisabled]}
-              onPress={handleLogin}
-              disabled={loading}
-              activeOpacity={0.8}
-            >
-              {loading
-                ? <ActivityIndicator color="#fff" />
-                : <Text style={styles.btnText}>Continue →</Text>
-              }
+            <TouchableOpacity style={[styles.button, loading && styles.buttonDisabled]} onPress={handleLogin} disabled={loading}>
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Continue</Text>}
             </TouchableOpacity>
           </View>
 
-          {/* Info */}
-          <View style={styles.infoBox}>
-            <Text style={styles.infoTitle}>🔄 How sync works</Text>
-            <Text style={styles.infoText}>
-              Use the same email on all devices and the app will keep your data in sync through Firebase.
-            </Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoTitle}>What this login does</Text>
+            <Text style={styles.infoText}>It creates a stable local identity from your email, then uses that same identity for cloud sync. No password server is involved yet.</Text>
           </View>
-
-          <Text style={styles.note}>
-            No password needed. Your data is tied to your email.
-          </Text>
-
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bg },
-  kav:    { flex: 1 },
-  scroll: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
-
-  header: { alignItems: 'center', marginBottom: spacing.xxxl },
-  logo:   { fontSize: 56, marginBottom: spacing.lg },
-  title:  {
-    fontSize: font.xxxl, fontWeight: font.heavy,
-    color: '#fff', letterSpacing: -0.5, marginBottom: spacing.sm,
-  },
-  subtitle: {
-    fontSize: font.sm, color: colors.textSoft,
-    textAlign: 'center', lineHeight: 20,
-  },
-
-  form:  { marginBottom: spacing.xl },
-  label: { fontSize: font.sm, color: colors.textSoft, marginBottom: spacing.sm, fontWeight: font.medium },
-  input: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    color: colors.text,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md + 2,
-    fontSize: font.md,
-    marginBottom: spacing.md,
-  },
-  inputError: { borderColor: colors.red },
-  errorText:  { fontSize: font.xs, color: colors.red, marginBottom: spacing.md },
-
-  btn: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.md,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    ...require('../theme').shadow.md,
-  },
-  btnDisabled: { opacity: 0.6 },
-  btnText: { color: '#fff', fontSize: font.md, fontWeight: font.bold },
-
-  infoBox: {
-    backgroundColor: colors.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
-    padding: spacing.lg,
-    marginBottom: spacing.xl,
-  },
-  infoTitle: { fontSize: font.sm, fontWeight: font.semibold, color: '#fff', marginBottom: spacing.xs },
-  infoText:  { fontSize: font.xs, color: colors.textSoft, lineHeight: 18 },
-
-  note: { fontSize: font.xs, color: colors.muted, textAlign: 'center' },
-});
+const createStyles = ({ colors, spacing, radius, font, shadow, cardStyle, inputStyle }) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    flex: { flex: 1 },
+    scroll: {
+      flexGrow: 1,
+      justifyContent: 'center',
+      padding: spacing.xl,
+      gap: spacing.lg,
+    },
+    heroCard: {
+      ...cardStyle,
+      alignItems: 'center',
+      paddingVertical: spacing.xxl,
+    },
+    logo: { fontSize: 56, marginBottom: spacing.md },
+    title: { color: colors.text, fontSize: font.xxxl, fontWeight: font.heavy, marginBottom: spacing.sm },
+    subtitle: {
+      color: colors.textSoft,
+      fontSize: font.sm,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+    formCard: { ...cardStyle },
+    label: { color: colors.textSoft, fontSize: font.sm, fontWeight: font.medium, marginBottom: spacing.sm },
+    input: { ...inputStyle, marginBottom: spacing.sm },
+    inputError: { borderColor: colors.red },
+    error: { color: colors.red, fontSize: font.xs, marginBottom: spacing.md },
+    button: {
+      minHeight: 50,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shadow.sm,
+    },
+    buttonDisabled: { opacity: 0.6 },
+    buttonText: { color: '#fff', fontSize: font.md, fontWeight: font.bold },
+    infoCard: {
+      ...cardStyle,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.accent,
+    },
+    infoTitle: { color: colors.text, fontSize: font.sm, fontWeight: font.bold, marginBottom: spacing.xs },
+    infoText: { color: colors.textSoft, fontSize: font.xs, lineHeight: 18 },
+  });

@@ -1,43 +1,74 @@
-/**
- * screens/SettingsScreen.js
- * Sync settings, export/import, user info, logout
- */
-
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet,
-  ScrollView, Alert, ActivityIndicator, Share,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+
 import useStore from '../store';
-import { colors, spacing, radius, font, cardStyle } from '../theme';
+import { useAppTheme } from '../theme';
 import { storage } from '../utils/storage';
-import {
-  pushToCloud,
-  pullFromCloud,
-} from '../sync/firebaseSync';
+import { pushToCloud, pullFromCloud, flushScheduledPush } from '../sync/firebaseSync';
 
-export default function SettingsScreen({ onLogout }) {
-  const user        = useStore(s => s.user);
-  const syncStatus  = useStore(s => s.syncStatus);
-  const setSyncStatus = useStore(s => s.setSyncStatus);
-  const getSnapshot = useStore(s => s.getSnapshot);
-  const applyData   = useStore(s => s.applyData);
+export default function SettingsScreen({
+  onLogout,
+  lockConfigured,
+  onSetLockPin,
+  onClearLockPin,
+  onLockNow,
+}) {
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { colors, spacing, font } = theme;
 
-  const [syncing,      setSyncing]      = useState(false);
+  const user = useStore((state) => state.user);
+  const syncStatus = useStore((state) => state.syncStatus);
+  const setSyncStatus = useStore((state) => state.setSyncStatus);
+  const getSnapshot = useStore((state) => state.getSnapshot);
+  const applyData = useStore((state) => state.applyData);
+  const themeMode = useStore((state) => state.themeMode);
+  const setThemeMode = useStore((state) => state.setThemeMode);
 
-  // ─── Manual sync ─────────────────────────────────────────────────────────
-  const handleSync = async () => {
+  const [syncing, setSyncing] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [savingPin, setSavingPin] = useState(false);
+
+  const handlePush = async () => {
     setSyncing(true);
     setSyncStatus('syncing');
+
     try {
-      await pushToCloud(getSnapshot());
+      const result = await pushToCloud(getSnapshot());
       setSyncStatus('synced');
-      Alert.alert('✅ Synced', 'Your data has been pushed to the cloud.');
-    } catch (e) {
+
+      const changedCount = result?.changedSections?.length || 0;
+      Alert.alert(
+        'Sync complete',
+        changedCount > 0
+          ? `Pushed ${changedCount} changed section${changedCount === 1 ? '' : 's'} to Firebase.`
+          : 'Nothing changed, so no cloud write was needed.'
+      );
+    } catch (error) {
       setSyncStatus('error');
-      Alert.alert('❌ Sync failed', e.message);
+      if (error?.code === 'payload-too-large') {
+        const section = error?.section ? ` (${error.section})` : '';
+        const itemId = error?.itemId ? `\nItem: ${error.itemId}` : '';
+        Alert.alert('Sync failed', `Cloud payload too large${section}.${itemId}`);
+      } else {
+        Alert.alert('Sync failed', error?.message || 'Unknown sync error');
+      }
     } finally {
       setSyncing(false);
     }
@@ -45,45 +76,120 @@ export default function SettingsScreen({ onLogout }) {
 
   const handlePull = async () => {
     setSyncing(true);
+    setSyncStatus('syncing');
+
     try {
       const data = await pullFromCloud();
-      if (data) {
-        applyData(data);
-        await storage.save(data);
-        Alert.alert('✅ Pulled', 'Latest cloud data applied to this device.');
-      } else {
-        Alert.alert('No data', 'No cloud data found for your account yet.');
+      if (!data) {
+        setSyncStatus('synced');
+        Alert.alert('No cloud data', 'No synced data was found for this email yet.');
+        return;
       }
-    } catch (e) {
-      Alert.alert('❌ Pull failed', e.message);
+
+      applyData(data);
+      await storage.save(useStore.getState().getSnapshot());
+      setSyncStatus('synced');
+      Alert.alert('Pull complete', 'Latest cloud changes were applied on this device.');
+    } catch (error) {
+      setSyncStatus('error');
+      Alert.alert('Pull failed', error?.message || 'Unknown pull error');
     } finally {
       setSyncing(false);
     }
   };
 
-  // ─── Export ──────────────────────────────────────────────────────────────
-  const handleExport = async () => {
-    const data    = getSnapshot();
-    const json    = JSON.stringify(data, null, 2);
-    const filename = `personal-manager-backup-${new Date().toISOString().split('T')[0]}.json`;
+  const handleFlush = async () => {
+    setSyncing(true);
+    setSyncStatus('syncing');
+
     try {
-      await Share.share({ message: json, title: filename });
-    } catch (e) {
-      Alert.alert('Export failed', e.message);
+      const result = await flushScheduledPush();
+      setSyncStatus('synced');
+      Alert.alert(
+        'Auto-sync flushed',
+        result?.changedSections?.length
+          ? 'Queued local changes were pushed now.'
+          : 'There was no queued local change waiting to sync.'
+      );
+    } catch (error) {
+      setSyncStatus('error');
+      Alert.alert('Flush failed', error?.message || 'Unknown sync error');
+    } finally {
+      setSyncing(false);
     }
   };
 
-  // ─── Logout ──────────────────────────────────────────────────────────────
-  const handleLogout = () => {
+  const handleExport = async () => {
+    const data = getSnapshot();
+    const json = JSON.stringify(data, null, 2);
+    const filename = `personal-manager-backup-${new Date().toISOString().split('T')[0]}.json`;
+
+    try {
+      await Share.share({ message: json, title: filename });
+    } catch (error) {
+      Alert.alert('Export failed', error?.message || 'Could not export backup.');
+    }
+  };
+
+  const openPinModal = () => {
+    setPin('');
+    setConfirmPin('');
+    setShowPinModal(true);
+  };
+
+  const savePin = async () => {
+    const trimmedPin = pin.trim();
+    const trimmedConfirm = confirmPin.trim();
+
+    if (!/^\d{4,8}$/.test(trimmedPin)) {
+      Alert.alert('Invalid PIN', 'Use a 4 to 8 digit PIN.');
+      return;
+    }
+
+    if (trimmedPin !== trimmedConfirm) {
+      Alert.alert('PIN mismatch', 'PIN and confirmation do not match.');
+      return;
+    }
+
+    setSavingPin(true);
+    try {
+      await onSetLockPin(trimmedPin);
+      setShowPinModal(false);
+      Alert.alert('App lock enabled', 'The app will require your PIN after you background or lock it.');
+    } finally {
+      setSavingPin(false);
+    }
+  };
+
+  const removePin = () => {
+    Alert.alert(
+      'Remove app lock?',
+      'This will disable PIN protection on this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            await onClearLockPin();
+            Alert.alert('App lock removed', 'PIN protection is now disabled.');
+          },
+        },
+      ]
+    );
+  };
+
+  const logout = () => {
     Alert.alert(
       'Sign out',
-      'Your local data stays on this device. Sign back in with the same email to resync.',
+      'Your local data stays on this device. Signing in again with the same email will reconnect sync.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Sign out',
           style: 'destructive',
           onPress: async () => {
+            await flushScheduledPush().catch(() => {});
             await storage.clearUser();
             onLogout();
           },
@@ -92,145 +198,329 @@ export default function SettingsScreen({ onLogout }) {
     );
   };
 
+  const syncTone =
+    syncStatus === 'synced'
+      ? colors.green
+      : syncStatus === 'error'
+      ? colors.red
+      : colors.accent;
+
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scroll}>
-
-        {/* Account */}
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.card}>
-          <View style={styles.row}>
+          <View style={styles.profileRow}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{user?.email?.[0]?.toUpperCase() || '?'}</Text>
             </View>
-            <View style={{ flex:1 }}>
-              <Text style={styles.userEmail}>{user?.email}</Text>
-              <Text style={styles.userId}>ID: {user?.uid}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.userEmail}>{user?.email || 'No email'}</Text>
+              <Text style={styles.userId}>Sync ID: {user?.uid || 'n/a'}</Text>
             </View>
           </View>
         </View>
 
-        {/* Sync */}
-        <Text style={styles.sectionLabel}>Sync</Text>
-
-        {/* Sync status banner */}
-        <View style={[styles.syncBanner, { borderLeftColor: syncStatus === 'synced' ? colors.green : syncStatus === 'error' ? colors.red : colors.accent }]}>
-          <Text style={styles.syncBannerTitle}>
-            {syncStatus === 'synced' ? '✅ Synced' : syncStatus === 'error' ? '❌ Sync error' : syncStatus === 'syncing' ? '🔄 Syncing...' : '☁️ Cloud Sync'}
+        <Text style={styles.sectionLabel}>Cloud Sync</Text>
+        <View style={[styles.banner, { borderLeftColor: syncTone }]}> 
+          <Text style={styles.bannerTitle}>
+            {syncStatus === 'synced'
+              ? 'Cloud sync is healthy'
+              : syncStatus === 'error'
+              ? 'Cloud sync needs attention'
+              : syncStatus === 'syncing'
+              ? 'Sync in progress'
+              : 'Offline-first sync'}
           </Text>
-          <Text style={styles.syncBannerDesc}>
-            Firebase is configured. Offline edits save locally and sync when internet is available.
+          <Text style={styles.bannerText}>
+            Local changes save instantly. Android now queues cloud writes and pushes after you pause, when you background the app, or when you sync manually.
           </Text>
         </View>
-
         <View style={styles.card}>
           <SettingRow
+            theme={theme}
             icon="cloud-upload-outline"
-            label="Push to Cloud"
-            desc="Send this device's data to the cloud"
-            onPress={handleSync}
-            loading={syncing}
             color={colors.accent}
+            label="Sync Now"
+            description="Push this device's latest state to Firebase"
+            loading={syncing}
+            onPress={handlePush}
           />
           <View style={styles.divider} />
           <SettingRow
-            icon="cloud-download-outline"
-            label="Pull from Cloud"
-            desc="Get latest data from the cloud"
-            onPress={handlePull}
-            loading={syncing}
+            theme={theme}
+            icon="download-outline"
             color={colors.green}
+            label="Pull Cloud Changes"
+            description="Fetch remote updates without waiting for the live listener"
+            loading={syncing}
+            onPress={handlePull}
+          />
+          <View style={styles.divider} />
+          <SettingRow
+            theme={theme}
+            icon="time-outline"
+            color={colors.orange}
+            label="Flush Queued Sync"
+            description="Force any queued auto-sync write to run now"
+            loading={syncing}
+            onPress={handleFlush}
           />
         </View>
 
-        {/* How sync works */}
-        <View style={styles.infoBox}>
-          <Text style={styles.infoTitle}>🔄 How sync works with Firebase</Text>
-          <Text style={styles.infoText}>
-            1. Every change is saved locally first (offline-first){'\n'}
-            2. Sync pushes your latest data to Firestore when online{'\n'}
-            3. Other devices with same email receive updates{'\n'}
-            4. Offline updates are retried automatically
-          </Text>
+        <Text style={styles.sectionLabel}>Appearance</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Theme</Text>
+          <View style={styles.themeRow}>
+            {['dark', 'light'].map((mode) => {
+              const active = themeMode === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  style={[
+                    styles.themeButton,
+                    active && {
+                      backgroundColor: colors.accentSoft,
+                      borderColor: colors.accent,
+                    },
+                  ]}
+                  onPress={() => setThemeMode(mode)}
+                >
+                  <Ionicons
+                    name={mode === 'dark' ? 'moon-outline' : 'sunny-outline'}
+                    size={16}
+                    color={active ? colors.accent : colors.textSoft}
+                  />
+                  <Text
+                    style={[
+                      styles.themeButtonText,
+                      { color: active ? colors.accent : colors.textSoft },
+                    ]}
+                  >
+                    {mode === 'dark' ? 'Dark' : 'Light'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
-        {/* Backup */}
+        <Text style={styles.sectionLabel}>Security</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>App Lock</Text>
+          <Text style={styles.cardDescription}>
+            Protect the vault, notes, and everything else on this device with a PIN.
+          </Text>
+          <View style={styles.securityActions}>
+            <TouchableOpacity style={styles.primaryButton} onPress={openPinModal}>
+              <Text style={styles.primaryButtonText}>{lockConfigured ? 'Change PIN' : 'Set PIN'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryButton} onPress={onLockNow}>
+              <Text style={styles.secondaryButtonText}>Lock Now</Text>
+            </TouchableOpacity>
+          </View>
+          {lockConfigured ? (
+            <TouchableOpacity style={styles.removeButton} onPress={removePin}>
+              <Text style={styles.removeButtonText}>Remove PIN</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
         <Text style={styles.sectionLabel}>Backup</Text>
         <View style={styles.card}>
           <SettingRow
-            icon="share-outline"
-            label="Export as JSON"
-            desc="Share your data as a backup file"
-            onPress={handleExport}
+            theme={theme}
+            icon="share-social-outline"
             color={colors.purple}
+            label="Export JSON Backup"
+            description="Share the current local snapshot as a backup"
+            onPress={handleExport}
           />
         </View>
 
-        {/* Danger */}
-        <Text style={styles.sectionLabel}>Account</Text>
+        <Text style={styles.sectionLabel}>Session</Text>
         <View style={styles.card}>
           <SettingRow
+            theme={theme}
             icon="log-out-outline"
-            label="Sign out"
-            desc="Local data stays on device"
-            onPress={handleLogout}
             color={colors.red}
+            label="Sign Out"
+            description="Local data stays on the device"
+            onPress={logout}
           />
         </View>
 
-        <Text style={styles.version}>Personal Manager v1.0.0</Text>
-
+        <Text style={styles.version}>Personal Manager Android</Text>
       </ScrollView>
 
+      <Modal visible={showPinModal} transparent animationType="slide">
+        <Pressable style={styles.overlay} onPress={() => setShowPinModal(false)}>
+          <Pressable style={styles.modal} onPress={(event) => event.stopPropagation()}>
+            <Text style={styles.modalTitle}>{lockConfigured ? 'Change App PIN' : 'Set App PIN'}</Text>
+            <Text style={styles.modalText}>Use a 4 to 8 digit PIN. It stays on this device only.</Text>
+
+            <TextInput
+              style={styles.input}
+              value={pin}
+              onChangeText={(value) => setPin(value.replace(/[^0-9]/g, '').slice(0, 8))}
+              placeholder="PIN"
+              placeholderTextColor={colors.muted}
+              keyboardType="number-pad"
+              secureTextEntry
+              autoFocus
+            />
+            <TextInput
+              style={styles.input}
+              value={confirmPin}
+              onChangeText={(value) => setConfirmPin(value.replace(/[^0-9]/g, '').slice(0, 8))}
+              placeholder="Confirm PIN"
+              placeholderTextColor={colors.muted}
+              keyboardType="number-pad"
+              secureTextEntry
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.secondaryButton} onPress={() => setShowPinModal(false)}>
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.primaryButton} onPress={savePin} disabled={savingPin}>
+                {savingPin ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Save PIN</Text>}
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-function SettingRow({ icon, label, desc, onPress, loading, color }) {
+function SettingRow({ theme, icon, label, description, onPress, loading, color }) {
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { colors } = theme;
+
   return (
-    <TouchableOpacity style={styles.settingRow} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.settingIcon, { backgroundColor: color + '22' }]}>
-        {loading
-          ? <ActivityIndicator size="small" color={color} />
-          : <Ionicons name={icon} size={18} color={color} />
-        }
+    <TouchableOpacity style={styles.settingRow} onPress={onPress} activeOpacity={0.8}>
+      <View style={[styles.settingIcon, { backgroundColor: `${color}22` }]}>
+        {loading ? <ActivityIndicator size="small" color={color} /> : <Ionicons name={icon} size={18} color={color} />}
       </View>
-      <View style={{ flex:1 }}>
+      <View style={{ flex: 1 }}>
         <Text style={styles.settingLabel}>{label}</Text>
-        {desc ? <Text style={styles.settingDesc}>{desc}</Text> : null}
+        {description ? <Text style={styles.settingDescription}>{description}</Text> : null}
       </View>
       <Ionicons name="chevron-forward" size={16} color={colors.muted} />
     </TouchableOpacity>
   );
 }
 
-const styles = StyleSheet.create({
-  safe:   { flex:1, backgroundColor: colors.bg },
-  scroll: { padding: spacing.lg, paddingBottom: 60 },
-
-  sectionLabel: { fontSize: font.xs, color: colors.muted, fontWeight: font.semibold, textTransform:'uppercase', letterSpacing:0.15, marginBottom: spacing.sm, marginTop: spacing.lg },
-
-  card: { ...cardStyle, padding:0, overflow:'hidden', marginBottom: spacing.sm },
-  row:  { flexDirection:'row', alignItems:'center', gap: spacing.md, padding: spacing.lg },
-  avatar: { width:44, height:44, borderRadius:22, backgroundColor: colors.accentSoft, alignItems:'center', justifyContent:'center' },
-  avatarText: { fontSize: font.lg, fontWeight: font.bold, color: colors.accent },
-  userEmail: { fontSize: font.md, fontWeight: font.semibold, color:'#fff' },
-  userId: { fontSize: font.xs, color: colors.muted, marginTop:2 },
-
-  syncBanner: { borderLeftWidth:3, backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, borderWidth:1, borderColor: colors.border },
-  syncBannerTitle: { fontSize: font.sm, fontWeight: font.bold, color:'#fff', marginBottom:4 },
-  syncBannerDesc:  { fontSize: font.xs, color: colors.textSoft, lineHeight:17 },
-
-  settingRow: { flexDirection:'row', alignItems:'center', gap: spacing.md, padding: spacing.lg },
-  settingIcon: { width:36, height:36, borderRadius: radius.sm, alignItems:'center', justifyContent:'center' },
-  settingLabel: { fontSize: font.sm, fontWeight: font.medium, color:'#fff', marginBottom:2 },
-  settingDesc:  { fontSize: font.xs, color: colors.muted },
-  divider: { height:1, backgroundColor: colors.border, marginLeft: spacing.lg + 36 + spacing.md },
-
-  infoBox: { backgroundColor: colors.card, borderRadius: radius.md, borderWidth:1, borderColor: colors.border, borderLeftWidth:3, borderLeftColor: colors.accent, padding: spacing.md, marginBottom: spacing.sm },
-  infoTitle: { fontSize: font.sm, fontWeight: font.semibold, color:'#fff', marginBottom: spacing.xs },
-  infoText:  { fontSize: font.xs, color: colors.textSoft, lineHeight:18 },
-
-  version: { textAlign:'center', fontSize: font.xs, color: colors.muted, marginTop: spacing.xl },
-
-});
+const createStyles = ({ colors, spacing, radius, font, shadow, cardStyle, inputStyle }) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    sectionLabel: {
+      fontSize: font.xs,
+      color: colors.muted,
+      fontWeight: font.semibold,
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+      marginTop: spacing.lg,
+      marginBottom: spacing.sm,
+    },
+    card: { ...cardStyle, padding: 0, overflow: 'hidden', marginBottom: spacing.xs },
+    profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg },
+    avatar: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.accentSoft,
+    },
+    avatarText: { color: colors.accent, fontSize: font.lg, fontWeight: font.bold },
+    userEmail: { color: colors.text, fontSize: font.md, fontWeight: font.bold },
+    userId: { color: colors.textSoft, fontSize: font.xs, marginTop: 3 },
+    banner: {
+      borderLeftWidth: 3,
+      backgroundColor: colors.card,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: spacing.md,
+      marginBottom: spacing.sm,
+    },
+    bannerTitle: { color: colors.text, fontSize: font.sm, fontWeight: font.bold, marginBottom: 4 },
+    bannerText: { color: colors.textSoft, fontSize: font.xs, lineHeight: 18 },
+    settingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg },
+    settingIcon: {
+      width: 38,
+      height: 38,
+      borderRadius: radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    settingLabel: { color: colors.text, fontSize: font.sm, fontWeight: font.semibold, marginBottom: 2 },
+    settingDescription: { color: colors.textSoft, fontSize: font.xs, lineHeight: 17 },
+    divider: { height: 1, backgroundColor: colors.border, marginLeft: spacing.lg + 38 + spacing.md },
+    cardTitle: { color: colors.text, fontSize: font.sm, fontWeight: font.bold, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+    cardDescription: { color: colors.textSoft, fontSize: font.xs, lineHeight: 18, paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+    themeRow: { flexDirection: 'row', gap: spacing.sm, padding: spacing.lg },
+    themeButton: {
+      flex: 1,
+      minHeight: 46,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    themeButtonText: { fontSize: font.sm, fontWeight: font.semibold },
+    securityActions: { flexDirection: 'row', gap: spacing.sm, padding: spacing.lg },
+    primaryButton: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shadow.sm,
+    },
+    primaryButtonText: { color: '#fff', fontSize: font.sm, fontWeight: font.bold },
+    secondaryButton: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: radius.md,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    secondaryButtonText: { color: colors.text, fontSize: font.sm, fontWeight: font.semibold },
+    removeButton: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.lg,
+      minHeight: 42,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.red,
+      backgroundColor: colors.redSoft,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    removeButtonText: { color: colors.red, fontSize: font.sm, fontWeight: font.semibold },
+    version: { color: colors.muted, fontSize: font.xs, textAlign: 'center', marginTop: spacing.xl },
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+    modal: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
+      padding: spacing.xl,
+      paddingBottom: spacing.xxxl,
+    },
+    modalTitle: { color: colors.text, fontSize: font.xl, fontWeight: font.bold, marginBottom: spacing.xs },
+    modalText: { color: colors.textSoft, fontSize: font.sm, lineHeight: 20, marginBottom: spacing.lg },
+    input: { ...inputStyle, marginBottom: spacing.md },
+    modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  });

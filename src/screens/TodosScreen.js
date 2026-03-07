@@ -1,57 +1,97 @@
-/**
- * screens/TodosScreen.js — Kanban board
- */
-
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, TextInput, Modal, Pressable,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import useStore from '../store';
-import { colors, spacing, radius, font, cardStyle } from '../theme';
-import { uuid, formatDate, isOverdue, showConfirm } from '../utils/helpers';
 
-const COLUMNS = [
-  { id: 'todo',        label: 'To Do',       color: colors.accent   },
-  { id: 'in-progress', label: 'In Progress', color: colors.orange   },
-  { id: 'done',        label: 'Done',        color: colors.green    },
-];
+import useStore from '../store';
+import { useAppTheme } from '../theme';
+import {
+  formatDate,
+  isOverdue,
+  priorityColor,
+  showConfirm,
+  uuid,
+} from '../utils/helpers';
 
 export default function TodosScreen() {
-  const todos      = useStore(s => s.todos);
-  const addTodo    = useStore(s => s.addTodo);
-  const updateTodo = useStore(s => s.updateTodo);
-  const deleteTodo = useStore(s => s.deleteTodo);
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { colors, spacing, radius, font, cardStyle, inputStyle } = theme;
 
-  const [showModal,  setShowModal]  = useState(false);
-  const [text,       setText]       = useState('');
-  const [priority,   setPriority]   = useState('medium');
-  const [dueDate,    setDueDate]    = useState('');
-  const [activeCol,  setActiveCol]  = useState('todo'); // which column is expanded on mobile
+  const todos = useStore((state) => state.todos);
+  const prioritizedTodos = useStore((state) => state.prioritizedTodos) || [];
+  const refreshAiSnapshot = useStore((state) => state.refreshAiSnapshot);
+  const addTodo = useStore((state) => state.addTodo);
+  const updateTodo = useStore((state) => state.updateTodo);
+  const deleteTodo = useStore((state) => state.deleteTodo);
 
-  const getColumnTodos = (status) =>
-    todos.filter(t =>
+  const [showModal, setShowModal] = useState(false);
+  const [text, setText] = useState('');
+  const [priority, setPriority] = useState('medium');
+  const [dueDate, setDueDate] = useState('');
+  const [activeCol, setActiveCol] = useState('todo');
+  const [runningAi, setRunningAi] = useState(false);
+
+  const columns = useMemo(
+    () => [
+      { id: 'todo', label: 'To Do', color: colors.todo },
+      { id: 'in-progress', label: 'Doing', color: colors.inProgress },
+      { id: 'done', label: 'Done', color: colors.done },
+    ],
+    [colors.done, colors.inProgress, colors.todo]
+  );
+
+  const aiScores = useMemo(
+    () => new Map(prioritizedTodos.map((item, index) => [item.id, { rank: index, score: Math.round(item.aiScore || 0) }])),
+    [prioritizedTodos]
+  );
+
+  const getColumnTodos = (status) => {
+    const matches = todos.filter((todo) =>
       status === 'todo'
-        ? (t.status === 'todo' || (!t.status && !t.done))
+        ? todo.status === 'todo' || (!todo.status && !todo.done)
         : status === 'done'
-        ? (t.status === 'done' || (!t.status && t.done))
-        : t.status === status
+        ? todo.status === 'done' || (!todo.status && todo.done)
+        : todo.status === status
     );
+
+    return matches.sort((left, right) => {
+      if (status !== 'todo') {
+        return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+      }
+
+      const leftRank = aiScores.get(left.id)?.rank ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = aiScores.get(right.id)?.rank ?? Number.MAX_SAFE_INTEGER;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0);
+    });
+  };
 
   const handleAdd = () => {
     if (!text.trim()) return;
+
     addTodo({
       id: uuid(),
       text: text.trim(),
       status: 'todo',
       done: false,
       priority,
-      dueDate: dueDate || null,
+      dueDate: dueDate.trim() || null,
       updatedAt: new Date().toISOString(),
     });
-    setText(''); setPriority('medium'); setDueDate('');
+
+    setText('');
+    setPriority('medium');
+    setDueDate('');
     setShowModal(false);
   };
 
@@ -60,66 +100,94 @@ export default function TodosScreen() {
   };
 
   const handleDelete = (id) => {
-    showConfirm('Delete card?', 'This cannot be undone.', () => deleteTodo(id));
+    showConfirm('Delete task?', 'This task will be removed permanently.', () => deleteTodo(id));
   };
+
+  const handleAiPrioritize = async () => {
+    setRunningAi(true);
+    await refreshAiSnapshot();
+    setRunningAi(false);
+  };
+
+  const visibleTodos = getColumnTodos(activeCol);
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
-
-      {/* Column tabs */}
-      <View style={styles.colTabs}>
-        {COLUMNS.map(col => (
-          <TouchableOpacity
-            key={col.id}
-            style={[styles.colTab, activeCol === col.id && { borderBottomColor: col.color, borderBottomWidth: 2 }]}
-            onPress={() => setActiveCol(col.id)}
-          >
-            <Text style={[styles.colTabText, activeCol === col.id && { color: col.color }]}>
-              {col.label}
-            </Text>
-            <View style={[styles.colBadge, { backgroundColor: col.color + '22' }]}>
-              <Text style={[styles.colBadgeText, { color: col.color }]}>
-                {getColumnTodos(col.id).length}
+      <View style={styles.headerStrip}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colTabs}>
+          {columns.map((column) => (
+            <TouchableOpacity
+              key={column.id}
+              style={[
+                styles.colTab,
+                activeCol === column.id && {
+                  borderColor: column.color,
+                  backgroundColor: `${column.color}16`,
+                },
+              ]}
+              onPress={() => setActiveCol(column.id)}
+            >
+              <Text
+                style={[
+                  styles.colTabText,
+                  { color: activeCol === column.id ? column.color : colors.textSoft },
+                ]}
+              >
+                {column.label}
               </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+              <View style={[styles.colBadge, { backgroundColor: `${column.color}20` }]}>
+                <Text style={[styles.colBadgeText, { color: column.color }]}>{getColumnTodos(column.id).length}</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        <TouchableOpacity style={styles.aiButton} onPress={handleAiPrioritize}>
+          <Ionicons name={runningAi ? 'sync-outline' : 'sparkles-outline'} size={16} color="#fff" />
+          <Text style={styles.aiButtonText}>{runningAi ? 'Ranking...' : 'AI Prioritize'}</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Cards */}
+      {activeCol === 'todo' && prioritizedTodos.length > 0 ? (
+        <View style={styles.aiHintBox}>
+          <Text style={styles.aiHintTitle}>AI Focus Order</Text>
+          <Text style={styles.aiHintText}>Open tasks are sorted by urgency, deadlines, and your current priority flags.</Text>
+        </View>
+      ) : null}
+
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        {getColumnTodos(activeCol).map(todo => (
+        {visibleTodos.map((todo) => (
           <TodoCard
             key={todo.id}
+            theme={theme}
             todo={todo}
+            currentStatus={activeCol}
+            columns={columns}
+            aiScore={aiScores.get(todo.id)?.score}
             onMove={handleMove}
             onDelete={handleDelete}
-            currentStatus={activeCol}
           />
         ))}
-        {getColumnTodos(activeCol).length === 0 && (
+
+        {visibleTodos.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>
-              {activeCol === 'todo' ? '📝' : activeCol === 'in-progress' ? '⚡' : '✅'}
-            </Text>
-            <Text style={styles.emptyText}>No cards here</Text>
+            <Text style={styles.emptyIcon}>{activeCol === 'done' ? '✅' : activeCol === 'in-progress' ? '⚡' : '📝'}</Text>
+            <Text style={styles.emptyText}>No tasks in this lane yet.</Text>
           </View>
-        )}
+        ) : null}
       </ScrollView>
 
-      {/* FAB */}
       <TouchableOpacity style={styles.fab} onPress={() => setShowModal(true)}>
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 
-      {/* Add Modal */}
       <Modal visible={showModal} transparent animationType="slide">
         <Pressable style={styles.overlay} onPress={() => setShowModal(false)}>
-          <Pressable style={styles.modal} onPress={e => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Add Card</Text>
+          <Pressable style={styles.modal} onPress={(event) => event.stopPropagation()}>
+            <Text style={styles.modalTitle}>Add Task</Text>
 
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.textArea]}
               placeholder="What needs to be done?"
               placeholderTextColor={colors.muted}
               value={text}
@@ -128,152 +196,245 @@ export default function TodosScreen() {
               autoFocus
             />
 
-            {/* Priority */}
             <Text style={styles.fieldLabel}>Priority</Text>
             <View style={styles.priorityRow}>
-              {['low','medium','high'].map(p => (
-                <TouchableOpacity
-                  key={p}
-                  style={[styles.priBtn, priority === p && styles.priBtnActive]}
-                  onPress={() => setPriority(p)}
-                >
-                  <Text style={[styles.priBtnText, priority === p && styles.priBtnTextActive]}>
-                    {p}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {['low', 'medium', 'high'].map((level) => {
+                const active = priority === level;
+                const tone = priorityColor(level, colors);
+                return (
+                  <TouchableOpacity
+                    key={level}
+                    style={[
+                      styles.priorityButton,
+                      active && { borderColor: tone, backgroundColor: `${tone}18` },
+                    ]}
+                    onPress={() => setPriority(level)}
+                  >
+                    <Text style={[styles.priorityButtonText, { color: active ? tone : colors.textSoft }]}>{level}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
-            <TouchableOpacity
-              style={[styles.addBtn, !text.trim() && styles.addBtnDisabled]}
-              onPress={handleAdd}
-              disabled={!text.trim()}
-            >
-              <Text style={styles.addBtnText}>Add Card</Text>
-            </TouchableOpacity>
+            <Text style={styles.fieldLabel}>Due Date</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="YYYY-MM-DD (optional)"
+              placeholderTextColor={colors.muted}
+              value={dueDate}
+              onChangeText={setDueDate}
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.secondaryButton} onPress={() => setShowModal(false)}>
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButton, !text.trim() && styles.disabledButton]}
+                onPress={handleAdd}
+                disabled={!text.trim()}
+              >
+                <Text style={styles.primaryButtonText}>Save Task</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
-
     </SafeAreaView>
   );
 }
 
-function TodoCard({ todo, onMove, onDelete, currentStatus }) {
+function TodoCard({ theme, todo, currentStatus, columns, aiScore, onMove, onDelete }) {
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { colors } = theme;
   const [showActions, setShowActions] = useState(false);
 
-  const otherStatuses = COLUMNS
-    .filter(c => c.id !== currentStatus)
-    .map(c => ({ id: c.id, label: `Move to ${c.label}`, color: c.color }));
+  const otherStatuses = columns.filter((column) => column.id !== currentStatus);
+  const dueTone = todo.dueDate && isOverdue(todo.dueDate) && currentStatus !== 'done' ? colors.red : colors.textSoft;
 
   return (
     <TouchableOpacity
       style={styles.card}
-      onLongPress={() => setShowActions(s => !s)}
-      activeOpacity={0.85}
+      activeOpacity={0.84}
+      onLongPress={() => setShowActions((current) => !current)}
     >
-      <Text style={styles.cardText}>{todo.text}</Text>
-
-      <View style={styles.cardMeta}>
-        {todo.priority && (
-          <View style={[styles.badge, { backgroundColor: priorityBg(todo.priority) }]}>
-            <Text style={[styles.badgeText, { color: priorityColor(todo.priority) }]}>
-              {todo.priority}
-            </Text>
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardText}>{todo.text}</Text>
+        {typeof aiScore === 'number' && currentStatus === 'todo' ? (
+          <View style={styles.scorePill}>
+            <Text style={styles.scorePillText}>AI {aiScore}</Text>
           </View>
-        )}
-        {todo.dueDate && (
-          <View style={[styles.badge, { backgroundColor: isOverdue(todo.dueDate) && currentStatus !== 'done' ? colors.redSoft : colors.dim }]}>
-            <Text style={[styles.badgeText, { color: isOverdue(todo.dueDate) && currentStatus !== 'done' ? colors.red : colors.textSoft }]}>
-              {formatDate(todo.dueDate)}
-            </Text>
-          </View>
-        )}
+        ) : null}
       </View>
 
-      {showActions && (
+      <View style={styles.cardMeta}>
+        {todo.priority ? (
+          <View style={[styles.badge, { backgroundColor: `${priorityColor(todo.priority, colors)}18` }]}>
+            <Text style={[styles.badgeText, { color: priorityColor(todo.priority, colors) }]}>{todo.priority}</Text>
+          </View>
+        ) : null}
+        {todo.dueDate ? (
+          <View style={[styles.badge, { backgroundColor: `${dueTone}18` }]}>
+            <Text style={[styles.badgeText, { color: dueTone }]}>{formatDate(todo.dueDate)}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {showActions ? (
         <View style={styles.actions}>
-          {otherStatuses.map(s => (
+          {otherStatuses.map((status) => (
             <TouchableOpacity
-              key={s.id}
-              style={[styles.actionBtn, { borderColor: s.color }]}
-              onPress={() => { onMove(todo.id, s.id); setShowActions(false); }}
+              key={status.id}
+              style={[styles.actionButton, { borderColor: status.color }]}
+              onPress={() => {
+                onMove(todo.id, status.id);
+                setShowActions(false);
+              }}
             >
-              <Text style={[styles.actionBtnText, { color: s.color }]}>{s.label}</Text>
+              <Text style={[styles.actionButtonText, { color: status.color }]}>Move to {status.label}</Text>
             </TouchableOpacity>
           ))}
           <TouchableOpacity
-            style={[styles.actionBtn, { borderColor: colors.red }]}
-            onPress={() => { onDelete(todo.id); setShowActions(false); }}
+            style={[styles.actionButton, { borderColor: colors.red }]}
+            onPress={() => {
+              onDelete(todo.id);
+              setShowActions(false);
+            }}
           >
-            <Text style={[styles.actionBtnText, { color: colors.red }]}>Delete</Text>
+            <Text style={[styles.actionButtonText, { color: colors.red }]}>Delete</Text>
           </TouchableOpacity>
         </View>
-      )}
+      ) : null}
     </TouchableOpacity>
   );
 }
 
-const priorityColor = (p) => p === 'high' ? colors.red : p === 'medium' ? colors.orange : colors.green;
-const priorityBg    = (p) => p === 'high' ? colors.redSoft : p === 'medium' ? colors.orangeSoft : colors.greenSoft;
-
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: colors.bg },
-  scroll: { flex: 1 },
-  scrollContent: { padding: spacing.lg, gap: spacing.sm, paddingBottom: 100 },
-
-  colTabs: { flexDirection: 'row', backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
-  colTab:  { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingVertical: spacing.md },
-  colTabText: { fontSize: font.sm, fontWeight: font.semibold, color: colors.muted },
-  colBadge:   { borderRadius: radius.full, paddingHorizontal: 6, paddingVertical: 1 },
-  colBadgeText: { fontSize: 10, fontWeight: font.bold },
-
-  empty:     { alignItems: 'center', marginTop: 80 },
-  emptyIcon: { fontSize: 40, marginBottom: spacing.md },
-  emptyText: { fontSize: font.sm, color: colors.muted },
-
-  card: { ...cardStyle, marginBottom: spacing.sm },
-  cardText: { fontSize: font.md, color: colors.text, lineHeight: 22, marginBottom: spacing.sm },
-  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  badge:    { borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 },
-  badgeText:{ fontSize: font.xs, fontWeight: font.semibold },
-
-  actions:    { marginTop: spacing.md, gap: spacing.xs },
-  actionBtn:  { borderRadius: radius.sm, borderWidth: 1, padding: spacing.sm, alignItems: 'center' },
-  actionBtnText: { fontSize: font.xs, fontWeight: font.semibold },
-
-  fab: {
-    position: 'absolute', bottom: spacing.xl, right: spacing.xl,
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: colors.accent,
-    alignItems: 'center', justifyContent: 'center',
-    elevation: 8, shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8,
-  },
-
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  modal: {
-    backgroundColor: colors.card, borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl, padding: spacing.xl,
-    paddingBottom: spacing.xxxl,
-  },
-  modalTitle: { fontSize: font.lg, fontWeight: font.bold, color: '#fff', marginBottom: spacing.lg },
-  input: {
-    backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1,
-    borderColor: colors.border, color: colors.text, padding: spacing.lg,
-    fontSize: font.md, minHeight: 80, textAlignVertical: 'top', marginBottom: spacing.lg,
-  },
-  fieldLabel: { fontSize: font.xs, color: colors.textSoft, marginBottom: spacing.sm, fontWeight: font.medium },
-  priorityRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
-  priBtn: {
-    flex: 1, paddingVertical: spacing.sm, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.border, alignItems: 'center',
-    backgroundColor: colors.surface,
-  },
-  priBtnActive: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
-  priBtnText:   { fontSize: font.sm, color: colors.muted, fontWeight: font.medium, textTransform: 'capitalize' },
-  priBtnTextActive: { color: colors.accent },
-  addBtn: { backgroundColor: colors.accent, borderRadius: radius.md, padding: spacing.lg, alignItems: 'center' },
-  addBtnDisabled: { opacity: 0.4 },
-  addBtnText: { color: '#fff', fontWeight: font.bold, fontSize: font.md },
-});
+const createStyles = ({ colors, spacing, radius, font, shadow, cardStyle, inputStyle }) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    headerStrip: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm },
+    colTabs: { gap: spacing.sm, paddingRight: spacing.md },
+    colTab: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    colTabText: { fontSize: font.sm, fontWeight: font.semibold },
+    colBadge: { borderRadius: radius.full, paddingHorizontal: 7, paddingVertical: 2 },
+    colBadgeText: { fontSize: 10, fontWeight: font.bold },
+    aiButton: {
+      marginTop: spacing.sm,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.xs,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      ...shadow.sm,
+    },
+    aiButtonText: { color: '#fff', fontSize: font.sm, fontWeight: font.bold },
+    aiHintBox: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      padding: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.accent,
+    },
+    aiHintTitle: { color: colors.text, fontSize: font.sm, fontWeight: font.bold, marginBottom: 4 },
+    aiHintText: { color: colors.textSoft, fontSize: font.xs, lineHeight: 18 },
+    scroll: { flex: 1 },
+    scrollContent: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.sm, paddingBottom: 100 },
+    empty: { alignItems: 'center', marginTop: 84 },
+    emptyIcon: { fontSize: 42, marginBottom: spacing.md },
+    emptyText: { color: colors.textSoft, fontSize: font.sm },
+    card: { ...cardStyle, marginBottom: spacing.sm },
+    cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginBottom: spacing.sm },
+    cardText: { flex: 1, color: colors.text, fontSize: font.md, lineHeight: 22 },
+    scorePill: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+      borderRadius: radius.full,
+      backgroundColor: colors.accentSoft,
+    },
+    scorePillText: { color: colors.accent, fontSize: 10, fontWeight: font.bold },
+    cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+    badge: { borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+    badgeText: { fontSize: font.xs, fontWeight: font.semibold },
+    actions: { marginTop: spacing.md, gap: spacing.xs },
+    actionButton: {
+      borderWidth: 1,
+      borderRadius: radius.md,
+      paddingVertical: spacing.sm,
+      alignItems: 'center',
+    },
+    actionButtonText: { fontSize: font.xs, fontWeight: font.semibold },
+    fab: {
+      position: 'absolute',
+      right: spacing.xl,
+      bottom: spacing.xl,
+      width: 58,
+      height: 58,
+      borderRadius: 29,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...shadow.lg,
+    },
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+    modal: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
+      padding: spacing.xl,
+      paddingBottom: spacing.xxxl,
+    },
+    modalTitle: { color: colors.text, fontSize: font.xl, fontWeight: font.bold, marginBottom: spacing.lg },
+    fieldLabel: { color: colors.textSoft, fontSize: font.sm, fontWeight: font.medium, marginBottom: spacing.sm },
+    input: { ...inputStyle, marginBottom: spacing.md },
+    textArea: { minHeight: 96, textAlignVertical: 'top' },
+    priorityRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+    priorityButton: {
+      flex: 1,
+      minHeight: 42,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    priorityButtonText: { fontSize: font.sm, fontWeight: font.semibold, textTransform: 'capitalize' },
+    modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+    primaryButton: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    primaryButtonText: { color: '#fff', fontSize: font.sm, fontWeight: font.bold },
+    secondaryButton: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: radius.md,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    secondaryButtonText: { color: colors.text, fontSize: font.sm, fontWeight: font.semibold },
+    disabledButton: { opacity: 0.55 },
+  });
