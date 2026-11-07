@@ -52,6 +52,10 @@ Important: this is open for development only. Lock it down once Firebase Auth is
 
 ## 3. Install / Run
 
+Create a local `.env` file from `.env.example` and fill in the Firebase Web app
+values. Expo reads only `EXPO_PUBLIC_*` variables, so keep those names exactly;
+restart Expo after changing them. The real `.env` is ignored by Git.
+
 ```bash
 npm install
 npx expo start -c --android

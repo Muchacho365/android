@@ -9,6 +9,7 @@ import {
 	setDoc,
 } from "firebase/firestore";
 import { storage } from "../utils/storage";
+import { getFirebaseConfig, getMissingFirebaseConfig } from "./firebaseConfig";
 
 const SYNC_COLLECTION = "pm_user_data";
 const SECTIONS_SUBCOLLECTION = "sections";
@@ -20,15 +21,6 @@ const SCHEDULED_PUSH_DELAY_MS = 20000;
 const MAX_DOC_BYTES = 900 * 1024;
 const MAX_INLINE_ITEM_BYTES = 700 * 1024;
 const ITEM_CHUNK_BYTES = 240 * 1024;
-
-const FIREBASE_CONFIG = {
-	apiKey: "AIzaSyAikRl0YHSLtE_U0ZPGiSlFisWqj3LtcAs",
-	authDomain: "personal-manager-773f8.firebaseapp.com",
-	projectId: "personal-manager-773f8",
-	storageBucket: "personal-manager-773f8.firebasestorage.app",
-	messagingSenderId: "781821792144",
-	appId: "1:781821792144:web:b9df67be87e4d6df772d15",
-};
 
 const CLOUD_SECTIONS = [
 	"todos",
@@ -62,20 +54,33 @@ let _syncUnsubscribe = null;
 let _syncRetryTimer = null;
 let _scheduledPushTimer = null;
 let _scheduledPushPayload = null;
-let _isConfigured = true;
+let _isConfigured = false;
+let _firebaseConfig = null;
 
 export const refreshSyncConfig = async () => {
-	_isConfigured = true;
+	_firebaseConfig = getFirebaseConfig();
+	const missing = getMissingFirebaseConfig(_firebaseConfig);
+	_isConfigured = missing.length === 0;
+	if (!_isConfigured) {
+		console.warn(`[Sync] Firebase is not configured. Missing: ${missing.join(", ")}`);
+	}
 	return _isConfigured;
 };
 
 export const isSyncConfigured = () => _isConfigured;
 
 const getFirestoreDb = async () => {
+	if (!_isConfigured) {
+		await refreshSyncConfig();
+	}
+	if (!_isConfigured) {
+		throw new Error("Firebase is not configured. Set the required EXPO_PUBLIC_FIREBASE_* values in .env and restart Expo.");
+	}
+
 	if (!_db) {
 		const app = getApps().length
 			? getApp()
-			: initializeApp(FIREBASE_CONFIG);
+			: initializeApp(_firebaseConfig);
 		_db = getFirestore(app);
 	}
 
@@ -97,7 +102,7 @@ const logPermissionHint = async (op, error, extras = {}) => {
 		JSON.stringify({
 			code,
 			message,
-			projectId: FIREBASE_CONFIG.projectId,
+			projectId: _firebaseConfig?.projectId,
 			docPath: SYNC_DOC_PATH(uid),
 			uid,
 			...extras,
